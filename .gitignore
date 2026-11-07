@@ -1,0 +1,33 @@
+# Artifacts & Binaries (STRICT POLICY: Zero upstream binaries tracked)
+*.exe
+*.AppImage
+*.asar
+*.zip
+*.tar.*
+*.deb
+*.rpm
+*.snap
+
+# Upstream Alibaba assets & icons
+*.png
+*.ico
+*.svg
+assets/
+i18n/
+locales/
+
+# Build scratchpads & staging
+build/
+dist/
+scratch/
+tmp/
+.cache/
+node_modules/
+electron-dist/
+wineprefix/
+
+# Runtime data & environments
+.env
+*.log
+__pycache__/
+*.py[cod]
