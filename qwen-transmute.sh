@@ -55,6 +55,7 @@ Options:
   --dest <dir>         Target installation directory (default: ~/.local/share/qwen-desktop)
   --bin-dir <dir>      Binary launcher directory (default: ~/.local/bin)
   --test-e2e           Run post-install end-to-end launch & canary verification
+  --no-sandbox         Disable --no-sandbox flag in launcher (use if AppArmor profile is registered)
   --uninstall          Uninstall native Qwen desktop application and clean launchers
   -h, --help           Display this help message
 
@@ -62,6 +63,11 @@ Security & Integrity:
   - Pinned Qwen Installer SHA-256:   $PINNED_QWEN_SHA256
   - Pinned Electron Runtime SHA-256: $PINNED_ELECTRON_SHA256
   - User configuration and session state (~/.config/Qwen) are strictly preserved.
+
+Sandbox Note:
+  Ubuntu 24.04+ restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1).
+  Default launcher uses --no-sandbox. If you register an AppArmor profile (see --apparmor-profile),
+  use --no-sandbox flag to disable it and enable full sandboxing.
 EOF
 }
 
@@ -82,6 +88,15 @@ verify_sha256() {
     return 0
 }
 
+# Kill process and its entire process group/tree
+kill_tree() {
+    local pid=$1
+    local signal=${2:-TERM}
+    kill -$signal -$pid 2>/dev/null || true
+    sleep 0.3
+    kill -KILL -$pid 2>/dev/null || true
+}
+
 uninstall_qwen() {
     log_info "Uninstalling Qwen Linux Desktop runtime and launchers..."
     rm -rf "$DEFAULT_DEST"
@@ -98,6 +113,7 @@ uninstall_qwen() {
 INPUT_EXE=""
 DO_DOWNLOAD=false
 DO_E2E=false
+DISABLE_SANDBOX=true  # default: use --no-sandbox
 TARGET_DEST="$DEFAULT_DEST"
 TARGET_BIN="$DEFAULT_BIN_DIR"
 
@@ -116,6 +132,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --test-e2e)
             DO_E2E=true
+            shift
+            ;;
+        --no-sandbox)
+            DISABLE_SANDBOX=false
             shift
             ;;
         --dest)
@@ -304,13 +324,25 @@ log_ok "Installed native files in $TARGET_DEST"
 # Step 6: Create Launcher and Desktop Integration
 mkdir -p "$TARGET_BIN"
 LAUNCHER="$TARGET_BIN/qwen"
-cat << 'EOF' > "$LAUNCHER"
+
+# Build launcher with configurable sandbox flag
+SANDBOX_FLAG=""
+if [[ "$DISABLE_SANDBOX" == true ]]; then
+    SANDBOX_FLAG="--no-sandbox"
+    SANDBOX_NOTE="# Note: --no-sandbox is used by default on Ubuntu 24.04+ due to restricted
+# unprivileged user namespaces unless a dedicated AppArmor profile is registered.
+# Re-run with --no-sandbox flag to disable this if you have an AppArmor profile."
+else
+    SANDBOX_NOTE="# Note: Full sandboxing enabled (no --no-sandbox). Requires AppArmor profile
+# permitting unprivileged user namespace creation (see docs/APPARMOR.md)."
+fi
+
+cat << EOF > "$LAUNCHER"
 #!/usr/bin/env bash
 # Qwen Desktop Native Linux Launcher
-# Note: --no-sandbox is required by default on Ubuntu 24.04+ due to restricted
-# unprivileged user namespaces unless a dedicated AppArmor profile is registered.
-APP_DIR="$HOME/.local/share/qwen-desktop"
-exec "$APP_DIR/qwen" --no-sandbox "$@"
+$SANDBOX_NOTE
+APP_DIR="$TARGET_DEST"
+exec "\$APP_DIR/qwen" $SANDBOX_FLAG "\$@"
 EOF
 chmod +x "$LAUNCHER"
 log_ok "Created launcher at $LAUNCHER"
@@ -337,6 +369,15 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 log_ok "Registered desktop application at $DESKTOP_FILE"
 
+# Helper: kill process tree
+kill_tree() {
+    local pid=$1
+    local signal=${2:-TERM}
+    kill -$signal -$pid 2>/dev/null || true
+    sleep 0.3
+    kill -KILL -$pid 2>/dev/null || true
+}
+
 # Step 7: Post-Installation E2E Canary Verification
 if [[ "$DO_E2E" == true ]]; then
     log_info "Executing E2E Canary Verification..."
@@ -344,8 +385,22 @@ if [[ "$DO_E2E" == true ]]; then
         log_err "Launcher binary not found or not executable: $LAUNCHER"
         exit 1
     fi
-    # Test launch canary with timeout
-    CANARY_OUT=$(timeout 3s "$TARGET_DEST/qwen" --no-sandbox 2>&1 || true)
+    # Test launch canary - run in new process group, verify output, then KILL tree
+    CANARY_OUT_FILE=$(mktemp)
+    (
+        cd "$TARGET_DEST"
+        setsid timeout 5s "$TARGET_DEST/qwen" $SANDBOX_FLAG >"$CANARY_OUT_FILE" 2>&1 &
+        CANARY_PID=$!
+        sleep 2
+        if kill -0 -$CANARY_PID 2>/dev/null; then
+            sleep 1
+            kill_tree $CANARY_PID TERM
+        else
+            wait $CANARY_PID 2>/dev/null || true
+        fi
+    ) || true
+    CANARY_OUT=$(cat "$CANARY_OUT_FILE" 2>/dev/null || echo "")
+    rm -f "$CANARY_OUT_FILE"
     if [[ "$CANARY_OUT" == *"webviewLoaded"* || "$CANARY_OUT" == *"switchTheme"* || "$CANARY_OUT" == *"APPIMAGE env"* ]]; then
         log_ok "Canary startup check passed (Application window and webview initialized successfully)."
     else
@@ -371,6 +426,7 @@ echo -e "${COLOR_GREEN}=========================================================
 echo "Installation location: $TARGET_DEST"
 echo "CLI command:           $LAUNCHER (type 'qwen')"
 echo "Desktop launcher:      $DESKTOP_FILE"
+echo "Sandbox mode:          $([ "$DISABLE_SANDBOX" == true ] && echo '--no-sandbox (default)' || echo 'full sandboxing (--no-sandbox flag used)')"
 echo "Host MCP tools:        bun=$(command -v bun || echo 'not found'), uv=$(command -v uv || echo 'not found')"
 echo "User profile/session:  ~/.config/Qwen (untouched)"
 echo ""

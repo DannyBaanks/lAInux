@@ -11,7 +11,7 @@
 2. **Trademark Notice:** "Qwen", "Alibaba", and all related names, marks, emblems, and images are registered trademarks of their respective owners.
 3. **Zero Redistribution Policy:** This repository contains **ONLY original open-source automation scripts and text patches**. It does **NOT** contain, redistribute, or mirror any proprietary binaries (`.exe`, `.asar`), compiled Electron runtimes, application assets, or copyrighted iconography belonging to Alibaba.
 4. **User Compliance:** All upstream files are fetched directly by the end-user from official Alibaba servers (`download.qwen.ai`) on demand. Users must review and comply with Qwen's official [Terms of Service](https://chat.qwen.ai/) and software license agreements before downloading and running the client.
-5. **Distribution Status:** This repository is maintained as a private/internal research pipeline. Standalone binaries and modified bundles are not distributed publicly.
+5. **Distribution Status:** This repository is **publicly available** on GitHub as an open-source research pipeline. The code is published under the MIT license for transparency and community review.
 
 ---
 
@@ -51,6 +51,11 @@ To prevent supply-chain tampering and unexpected upstream payload drift, the pip
 
 If any file hash does not match the pinned ledger, the pipeline **fails closed**, aborts immediately, and initiates an automatic rollback without altering existing configurations.
 
+**Additional Hardening:**
+* The patcher (`lib/patcher.py`) fails if no modifications are applied (prevents silent no-op patches).
+* E2E tests run in fully isolated temporary directories — **never touching your real installation**.
+* Launcher sandbox mode is configurable (`--no-sandbox` flag).
+
 ---
 
 ## 🚀 Quickstart
@@ -78,6 +83,11 @@ If any file hash does not match the pinned ledger, the pipeline **fails closed**
    ./qwen-transmute.sh --download --test-e2e
    ```
 
+4. **Option D: Enable full sandboxing (requires AppArmor profile):**
+   ```bash
+   ./qwen-transmute.sh --download --test-e2e --no-sandbox
+   ```
+
 ### Launching Qwen
 Once transmutation is complete:
 * **From Terminal:**
@@ -91,14 +101,48 @@ Once transmutation is complete:
 ## 🔒 Modern Linux Sandbox & AppArmor Notice
 
 Ubuntu 24.04+ restricts unprivileged user namespaces via AppArmor (`kernel.apparmor_restrict_unprivileged_userns = 1`). As a result, standard Electron applications require either:
-1. Running with `--no-sandbox` (configured automatically in `~/.local/bin/qwen`), or
+1. Running with `--no-sandbox` (configured automatically in `~/.local/bin/qwen` by default), or
 2. Registering an AppArmor profile in `/etc/apparmor.d/qwen` permitting unprivileged user namespace creation.
+
+**To enable full sandboxing:**
+```bash
+# 1. Create AppArmor profile (one-time setup, requires sudo)
+sudo tee /etc/apparmor.d/qwen << 'EOF'
+#include <tunables/global>
+profile qwen /home/*/.local/share/qwen-desktop/qwen {
+  #include <abstractions/base>
+  #include <abstractions/fonts>
+  capability setuid,
+  capability setgid,
+  network inet,
+  network inet6,
+  unix (send, receive),
+  /home/*/.local/share/qwen-desktop/** r,
+  /home/*/.config/Qwen/** rwk,
+  /home/*/.cache/qwen-transmuter/** r,
+  owner /home/*/.local/share/qwen-desktop/qwen ix,
+  owner /home/*/.local/share/qwen-desktop/** m,
+  owner /tmp/** rw,
+  owner /run/user/*/wayland* rw,
+  owner @{PROC}/[0-9]*/** r,
+  # Allow unprivileged user namespaces for Electron sandbox
+  namespace unprivileged,
+}
+EOF
+
+# 2. Load profile
+sudo apparmor_parser -r /etc/apparmor.d/qwen
+
+# 3. Re-run transmuter with --no-sandbox flag (disables the launcher's --no-sandbox)
+./qwen-transmute.sh --download --test-e2e --no-sandbox
+```
 
 ---
 
 ## 🧪 E2E Test Suite
 
-A standalone test suite is provided to verify idempotency, clean uninstallation, and canary startup:
+A standalone test suite is provided to verify idempotency, clean uninstallation, and canary startup. **Tests run in isolated temporary directories and NEVER touch your real `~/.local/share/qwen-desktop` or `~/.local/bin/qwen`.**
+
 ```bash
 ./test_e2e.sh
 ```
@@ -114,5 +158,12 @@ The transmuter provides a clean uninstallation flag that removes the native runt
 
 ---
 
+## 📦 AppImage Support
+
+> **Status:** Not yet implemented in the published pipeline. The reverse engineering report documents successful manual AppImage builds (171 MB self-contained bundle). A future PR will add `./qwen-transmute.sh --appimage` to generate a distributable AppImage artifact.
+
+---
+
 ## 📄 License
+
 This transmutation pipeline and documentation are licensed under the [MIT License](LICENSE).
