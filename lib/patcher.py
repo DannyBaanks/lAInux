@@ -2,6 +2,9 @@
 """
 Qwen Linux Transmuter - Core AST / Code Patcher
 Patches extracted Qwen Electron bundle to enable native Linux support.
+
+FAIL-CLOSED: Returns non-zero exit code if no modifications were applied,
+preventing silent no-op patches from being treated as success.
 """
 
 import sys
@@ -55,7 +58,7 @@ def patch_main_index(file_path: str) -> bool:
             print("[+] Patched getPlatformDir via regex fallback.")
             modified = True
         else:
-            print("[!] Warning: getPlatformDir pattern not found (might already be patched).")
+            print("[!] Warning: getPlatformDir pattern not found (might already be patched or upstream changed).")
 
     # 2. Patch initializeAutoUpdater
     updater_target = """  if (process.platform === "darwin") {
@@ -83,7 +86,7 @@ def patch_main_index(file_path: str) -> bool:
             print("[+] Patched initializeAutoUpdater via regex fallback.")
             modified = True
         else:
-            print("[!] Warning: initializeAutoUpdater pattern not found (might already be patched).")
+            print("[!] Warning: initializeAutoUpdater pattern not found (might already be patched or upstream changed).")
 
     if modified:
         with open(file_path, "w", encoding="utf-8") as f:
@@ -91,8 +94,8 @@ def patch_main_index(file_path: str) -> bool:
         print(f"[✓] Successfully wrote patches to {file_path}")
         return True
 
-    print("[!] No modifications were applied.")
-    return True
+    print("[ERROR] No modifications were applied. Upstream may have changed; refusing to proceed (fail-closed).", file=sys.stderr)
+    return False
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
