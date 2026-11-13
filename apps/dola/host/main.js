@@ -3,7 +3,7 @@
 // answered from the local bundle when the file/route exists there (as Cici.dll does
 // on Windows) and passed through to the network otherwise.
 "use strict";
-const { app, BrowserWindow, protocol, net, session, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, protocol, net, session, ipcMain, shell, Menu } = require("electron");
 const fs = require("fs");
 const path = require("path");
 
@@ -118,6 +118,23 @@ const ctxOf = (w) => contexts.get(w.webContents.id);
 const HOST_WIN = {
   window: { setTitle: (w, [a]) => { w.setTitle(String(a && a.title || "Dola")); return true; } },
   webPage: { getZoom: (w) => w.webContents.getZoomFactor() },
+  pinWindow: {
+    // { url, command: "newTab" | "closeTab", forceRunInClient }
+    sendCommand: (w, [a]) => {
+      const cmd = a && a.command;
+      if (cmd === "newTab" && a.url) { openTab(a.url); return true; }
+      if (cmd === "closeTab") {
+        const target = [...tabs].find(t => t.webContents === w.webContents) ||
+          [...tabs].find(t => a.url && t.webContents.getURL().split("#")[0] === String(a.url).split("#")[0]);
+        if (target) target.close();
+        return true;
+      }
+      log(`TAB unsupported command ${JSON.stringify(a).slice(0, 200)}`);
+      return false;
+    },
+    setFloating: () => true,
+    getFloating: () => false,
+  },
   windowContext: {
     getHandlerToken: (w) => ctxOf(w)?.token,
     getWindowContextInfo: (_w, [name]) => {
@@ -134,7 +151,7 @@ const HOST_WIN = {
       const u = new URL((a && a.loginUrl) || "https://www.dola.com/client-login-modal");
       if (u.hostname === "www.dola.com" && u.pathname.startsWith("/client-login-modal")) u.pathname = "/login";
       const url = u.toString();
-      log(`LOGIN open ${url}`);
+      log(`LOGIN open ${url} args=${JSON.stringify(a).slice(0, 400)}`);
       loginWin = newWindow({ width: 460, height: 640, parent: w, modal: true, title: "Dola", autoHideMenuBar: true }, "login_view");
       loginWin.on("closed", () => {
         loginWin = null;
@@ -148,17 +165,25 @@ const HOST_WIN = {
           if (!loginWin || loginWin.isDestroyed()) return;
           fs.writeFileSync(process.env.DOLA_HOST_LOGIN_SHOT, (await loginWin.webContents.capturePage()).toPNG());
           log("LOGIN screenshot written");
+          if (process.env.DOLA_HOST_TEST_GOOGLE) {   // test hook: press "Continue with Google"
+            const r = await loginWin.webContents.executeJavaScript(`(() => {
+              const all = [...document.querySelectorAll('*')].filter(e => /Google/.test((e.innerText||'').trim()) && e.offsetParent);
+              const inner = all.filter(e => !all.some(o => o !== e && e.contains(o)));
+              if (!inner[0]) return 'no google button'; inner[0].click(); return 'clicked ' + inner[0].tagName; })()`, true);
+            log(`LOGIN google: ${r}`);
+          }
         }, 7000));
       }
       return true;
     },
     closeLoginWindow: () => { if (loginWin && !loginWin.isDestroyed()) loginWin.close(); return true; },
     resizeLoginWindow: (_w, [a]) => {
+      log(`LOGIN resize ${JSON.stringify(a)}`);
       if (loginWin && a && a.width && a.height) loginWin.setContentSize(Math.round(a.width), Math.round(a.height));
       return true;
     },
-    updateLoginWindowConfig: () => true,
-    setLoginWindowIgnoreResize: () => true,
+    updateLoginWindowConfig: (_w, [a]) => { log(`LOGIN config ${JSON.stringify(a)}`); return true; },
+    setLoginWindowIgnoreResize: (_w, [a]) => { log(`LOGIN ignoreResize ${JSON.stringify(a)}`); return true; },
   },
 };
 ipcMain.handle("neotix", async (e, ns, method, args) => {
@@ -205,11 +230,40 @@ function newWindow(opts, name) {
     log(`CONSOLE[${name}:${e.level}] ${String(e.message).slice(0, 300)}`);
   });
   win.webContents.on("did-fail-load", (_e, code, desc, url) => log(`FAIL[${name}] ${code} ${desc} ${url}`));
+  // window.open (e.g. the OAuth popups of the login view): log it, then let it open.
+  win.webContents.setWindowOpenHandler(({ url, features }) => {
+    log(`WINOPEN[${name}] ${url.slice(0, 200)} features=${features}`);
+    return { action: "allow" };
+  });
+  win.webContents.on("did-create-window", (child) => {
+    child.webContents.on("did-navigate", (_e, url) => log(`POPUP-NAV ${url.slice(0, 200)}`));
+  });
   return win;
 }
 let mainWin = null, loginWin = null;
+// Dola is also a browser: pinWindow "newTab" opens a page in a tab of the SAME profile.
+// Third-party login (Google, …) relies on it: the OAuth page redirects to
+// https://www.dola.com/auth/callback, which sets the session cookies here, while the
+// login view polls for the result. "closeTab" closes that tab again.
+const tabs = new Set();
+// Plain Chrome UA for tabs: identity providers refuse embedded browsers that announce
+// themselves as Electron or as another app.
+const chromeUA = () => session.defaultSession.getUserAgent().replace(/\s(Electron|qwen|dola-linux-host)\/\S+/gi, "");
+function openTab(url) {
+  const t = newWindow({ width: 1000, height: 760, title: "Dola", autoHideMenuBar: true }, "tab");
+  t.webContents.setUserAgent(chromeUA());
+  tabs.add(t);
+  t.on("closed", () => tabs.delete(t));
+  t.loadURL(url);
+  log(`TAB open ${url.slice(0, 160)}`);
+  if (process.env.DOLA_HOST_TAB_SHOT) t.webContents.once("did-finish-load", () => setTimeout(async () => {
+    if (!t.isDestroyed()) { fs.writeFileSync(process.env.DOLA_HOST_TAB_SHOT, (await t.webContents.capturePage()).toPNG()); log(`TAB screenshot ${t.webContents.getURL().slice(0, 120)}`); }
+  }, 6000));
+  return t;
+}
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null); // Dola has no File/Edit/View menu; editing shortcuts still work
   session.defaultSession.protocol.handle("dola", async (req) => {
     const u = new URL(req.url);
     const f = dolaFile(u);
