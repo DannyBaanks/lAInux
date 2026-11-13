@@ -221,9 +221,10 @@ function registerWindow(win, name) {
   contexts.set(win.webContents.id, { name, token: crypto.randomUUID(), win });
   win.on("closed", () => { for (const [k, v] of contexts) if (v.win === win) contexts.delete(k); });
 }
-function newWindow(opts, name) {
+function newWindow(opts, name, ses) {
   const win = new BrowserWindow({ ...opts, show: opts.show ?? !process.env.DOLA_HOST_HIDDEN,
-    webPreferences: { contextIsolation: false, sandbox: false, nodeIntegration: false, preload: path.join(__dirname, "preload.js") } });
+    webPreferences: { contextIsolation: false, sandbox: false, nodeIntegration: false, preload: path.join(__dirname, "preload.js"),
+      ...(ses ? { session: ses } : {}) } });
   registerWindow(win, name);
   win.webContents.on("console-message", (...a) => {
     const e = a[0] && typeof a[0].message === "string" ? a[0] : { level: a[1], message: a[2], sourceId: a[4], lineNumber: a[3] };
@@ -249,9 +250,33 @@ const tabs = new Set();
 // Plain Chrome UA for tabs: identity providers refuse embedded browsers that announce
 // themselves as Electron or as another app.
 const chromeUA = () => session.defaultSession.getUserAgent().replace(/\s(Electron|qwen|dola-linux-host)\/\S+/gi, "");
+// Tabs run in their own persistent session WITHOUT the https interceptor: identity
+// providers (Google…) need Chromium's own network stack (re-issuing their requests
+// through net.fetch drops Origin/Sec-Fetch headers and upload bodies -> HTTP 400).
+// Cookies the dola.com callback sets there are copied into the app session at once,
+// which is what the polling login view reads.
+let tabSession = null;
+function tabSes() {
+  if (tabSession) return tabSession;
+  tabSession = session.fromPartition("persist:dola-tabs");
+  tabSession.cookies.on("changed", async (_e, c, _cause, removed) => {
+    if (removed || !/(^|\.)dola\.com$/.test(c.domain.replace(/^\./, ""))) return;
+    const host = c.domain.replace(/^\./, "");
+    try {
+      await session.defaultSession.cookies.set({
+        url: `https://${host}${c.path || "/"}`, name: c.name, value: c.value,
+        domain: c.hostOnly ? undefined : c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+        sameSite: c.sameSite, expirationDate: c.expirationDate,
+      });
+      log(`COOKIE copied ${c.name} (${c.domain})`);
+    } catch (e) { log(`COOKIE copy failed ${c.name}: ${e && e.message}`); }
+  });
+  return tabSession;
+}
 function openTab(url) {
-  const t = newWindow({ width: 1000, height: 760, title: "Dola", autoHideMenuBar: true }, "tab");
+  const t = newWindow({ width: 1000, height: 760, title: "Dola", autoHideMenuBar: true }, "tab", tabSes());
   t.webContents.setUserAgent(chromeUA());
+  t.webContents.on("did-navigate", (_e, u) => log(`TAB nav ${u.slice(0, 120)}`));
   tabs.add(t);
   t.on("closed", () => tabs.delete(t));
   t.loadURL(url);
@@ -286,7 +311,12 @@ app.whenReady().then(() => {
     if (process.env.DOLA_HOST_LOG_MONITOR && /monitor|collect|slardar/.test(u.pathname)) {
       try { log(`MONITOR ${u.hostname}${u.pathname} ${(await req.clone().text()).slice(0, 20000)}`); } catch {}
     }
-    return net.fetch(req, { bypassCustomProtocolHandlers: true });
+    try {
+      return await net.fetch(req, { bypassCustomProtocolHandlers: true });
+    } catch (e) {   // DNS/connection failures must not become uncaught exceptions
+      log(`NETERR ${u.hostname}${u.pathname} ${e && e.message}`);
+      return new Response("", { status: 502, statusText: String(e && e.message || "network error") });
+    }
   });
   // Dola's hidden background page (dola://dola-background): serves "AgentBackground"
   // RPCs (rfc-request) for the visible windows, as the Windows host keeps it running.
