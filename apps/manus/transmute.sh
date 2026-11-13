@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Summary: Manus Desktop (Microsoft Store .Msixbundle -> Electron 43 on Linux, companions re-hosted by WINS)
-# Manus Desktop -> native Linux (recipe of the AI Desktop Transmuter corpus)
+# Manus Desktop -> native Linux (recipe of the lAInux corpus)
 #
 # Input : the official Windows package the user downloaded from the Microsoft
 #         Store / Manus (ManusAI.Manus_<ver>_neutral_~_<id>.Msixbundle).

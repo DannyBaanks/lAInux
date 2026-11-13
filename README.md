@@ -1,6 +1,6 @@
-# AI Desktop Transmuter
+# lAInux
 
-> **A corpus of recipes that turn AI desktop apps with no Linux build into native Linux apps, on your own machine.**
+> **AI apps, but make them Linux. A corpus of recipes that turn AI desktop apps with no Linux build into native Linux apps, on your own machine.**
 > *Zero proprietary redistribution · every input pinned by SHA-256 (fail closed) · your profile is never touched*
 
 Each app gets a recipe under `apps/<app>/`. A recipe takes the vendor's official

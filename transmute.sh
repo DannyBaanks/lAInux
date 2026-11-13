@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# AI Desktop Transmuter - corpus of AI desktop apps that ship no Linux build.
+# lAInux - corpus of AI desktop apps that ship no Linux build.
 #   ./transmute.sh list               apps in the corpus
 #   ./transmute.sh <app> [options]    run that app's recipe (see <app> --help)
 # Every recipe follows the same policy: no upstream binary in git, every input

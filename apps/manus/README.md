@@ -39,7 +39,7 @@ source) and PowerShell 7 for Linux (`pwsh`) for the agent terminal.
 
 * install `~/.local/share/manus-desktop`, notes for agents `WINS-PORT.md` inside it
 * profile `~/.config/Manus` (never touched), operator log `~/.config/Manus/logs/operator.log`
-* WINS logs `~/.cache/wins/logs/`, download cache `~/.cache/ai-desktop-transmuter/`
+* WINS logs `~/.cache/wins/logs/`, download cache `~/.cache/lainux/`
 
 ## Updating to a new Manus version
 
