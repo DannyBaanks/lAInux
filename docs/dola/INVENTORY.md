@@ -55,33 +55,29 @@ months. **Plan A:** Linux Chromium host + the vendor's UI and JS apps + our own
 implementation of the 23 capabilities and the transport, with **`liblark.dll` executed
 as-is by the WINS x64 loader** (a real vendor artifact, no Wine).
 
-## Phase 2 — what WINS x64 must grow (static, `tools/pe_gaps.py`)
+## Phase 2 — what WINS x64 must grow
 
-`liblark.dll` + `sscronet.dll` import 540 functions outside the pair:
+**Measured with the real loader (2026-11-13).** WINS branch `feat/x64-dll-loader`
+(`aaf3aa0`) adds `winload64`, a multi-image x86-64 DLL loader (validated 12/12 against
+Wine on synthetic DLLs). `winload64 --check` on `liblark.dll` + `sscronet.dll` (nothing
+executed) maps and relocates both images and stops at **209 unresolved import slots**
+(listed in `winload64_unresolved.txt`): kernel32 53, iphlpapi 32, crypt32 19, user32 18,
+api-ms-win-crt-* 38, advapi32 12, ws2_32 11 (ordinals already translated), dbghelp 7,
+ntdll 6, winhttp 4, and a few in vcruntime/ole/propsys/bcrypt.
 
-| Class | Count | Meaning |
-|---|---|---|
-| x64 | 9 | already in the x86-64 loader (`winrun_impl.zig`) |
-| 32-only | 333 | a same-named symbol exists for `winrun32` → logic to port to the x64 ABI |
-| missing | 198 | nowhere in `native/*.zig` (iphlpapi 27, ws2_32 30*, crypt32 17, CRT ~38, kernel32 45…) |
+The earlier name-based estimate (`tools/pe_gaps.py`, now following winrun's @import
+closure: 338 present / 4 32-only / 198 missing) agrees in size; the loader's list is
+the authoritative one.
 
-\* ws2_32 is imported by ordinal (`#1`=accept…); the matcher does not translate
-ordinals, so that row is overcounted (WINS has `winrun_ordinals.zig`). Name matching is
-an approximation: a symbol name in WINS source is not proof of a complete implementation.
-
-Runtime features the x64 loader lacks today (v0 = console EXE, 7 kernel32 functions):
-DLL loading + calling exports, TEB/PEB via GS, **TLS callbacks** (liblark 1, sscronet 4),
-**x64 SEH** (liblark has 408 580 `.pdata` entries), CFG-instrumented images
-(guard flags 0x100 / 0x500), delay import (`powrprof.dll`), api-set CRT
-(`api-ms-win-crt-*` → a UCRT implementation).
-
-Reusable pieces already in WINS: `winluxtrust` (Windows cert trust → Linux CA store, what
-`crypt32`'s chain checks need), `winluxhttp`, ordinals table, 32-bit kernel32/msvcrt logic.
+Runtime features: TLS callbacks, DllMain and per-image TLS are done in winload64.
+Still missing: **x64 SEH dispatch** (liblark has 408 580 `.pdata` entries; validated,
+not dispatched), new threads + DLL_THREAD_ATTACH (Cronet/Rust start worker threads),
+CFG is tolerated (guard check pointers stay at their in-image defaults).
 
 ## Next milestones (phase 2 proper, in WINS, own branch)
 
-1. x64 DLL load: map, relocate, bind imports across images, run TLS callbacks + DllMain,
-   GS-based TEB/PEB, RtlAddFunctionTable over `.pdata`. Fixture: a synthetic x64 DLL.
+1. ~~x64 DLL load~~ **done** (WINS `aaf3aa0`): map, relocate, bind across images, TLS
+   callbacks + DllMain, per-image TLS, GS TEB/PEB. SEH table registration pending.
 2. `liblark.dll`: resolve + call `lark_sdk_version` (pure, no I/O) → first proof.
 3. `lark_sdk_pre_init` / `lark_sdk_init_pc` with sscronet loaded; differential oracle =
    the same calls under Wine (WINS rule).

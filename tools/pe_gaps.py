@@ -6,7 +6,7 @@ ordinal), TLS directory (callbacks), exception directory (.pdata entries), load
 config (security cookie, CFG flags), relocations. Each imported function is then
 classified against the WINS source tree:
 
-  x64      a symbol with that name exists in the x86-64 loader (winrun / winrun_impl)
+  x64      a symbol with that name is reachable from the x86-64 loader (winrun.zig @import closure)
   32-only  implemented for winrun32 (the logic exists; needs an x64 ABI port)
   missing  no implementation anywhere in native/*.zig
 
@@ -119,12 +119,21 @@ def wins_symbols(wins: Path) -> tuple[set[str], set[str]]:
     native = wins / "native"
     fn = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
     strname = re.compile(r'"([A-Za-z_][A-Za-z0-9_]{2,})"')
+    imp = re.compile(r'@import\("([A-Za-z0-9_]+\.zig)"\)')
+    # x64 set = everything reachable through @import from the x86-64 loader's root.
+    reach, todo = set(), ["winrun.zig"]
+    while todo:
+        f = todo.pop()
+        if f in reach or not (native / f).is_file():
+            continue
+        reach.add(f)
+        todo += imp.findall((native / f).read_text(errors="replace"))
     x64, every = set(), set()
     for z in native.glob("*.zig"):
         txt = z.read_text(errors="replace")
         names = set(fn.findall(txt)) | set(strname.findall(txt))
         every |= names
-        if z.name in ("winrun.zig", "winrun_impl.zig"):
+        if z.name in reach:
             x64 |= names
     return x64, every
 

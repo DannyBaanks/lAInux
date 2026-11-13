@@ -1067,7 +1067,7 @@
     "VirtualUnlock",
     "WaitForThreadpoolWorkCallbacks"
    ],
-   "32-only": [
+   "x64": [
     "AcquireSRWLockExclusive",
     "AreFileApisANSI",
     "CancelIo",
@@ -1096,6 +1096,7 @@
     "EncodePointer",
     "EnterCriticalSection",
     "EnumSystemLocalesW",
+    "ExitProcess",
     "ExitThread",
     "ExpandEnvironmentStringsW",
     "FileTimeToSystemTime",
@@ -1122,6 +1123,7 @@
     "GetConsoleOutputCP",
     "GetCurrentDirectoryW",
     "GetCurrentProcess",
+    "GetCurrentProcessId",
     "GetCurrentThread",
     "GetCurrentThreadId",
     "GetDateFormatW",
@@ -1141,12 +1143,14 @@
     "GetFinalPathNameByHandleW",
     "GetFullPathNameA",
     "GetFullPathNameW",
+    "GetLastError",
     "GetLocalTime",
     "GetLocaleInfoW",
     "GetLongPathNameW",
     "GetModuleFileNameW",
-    "GetModuleHandleExA",
+    "GetModuleHandleA",
     "GetModuleHandleExW",
+    "GetModuleHandleW",
     "GetNativeSystemInfo",
     "GetOEMCP",
     "GetProcAddress",
@@ -1155,6 +1159,7 @@
     "GetProductInfo",
     "GetQueuedCompletionStatus",
     "GetStartupInfoW",
+    "GetStdHandle",
     "GetStringTypeW",
     "GetSystemInfo",
     "GetSystemPowerStatus",
@@ -1199,13 +1204,13 @@
     "MoveFileExW",
     "MoveFileW",
     "MultiByteToWideChar",
-    "OpenThread",
     "OutputDebugStringA",
     "OutputDebugStringW",
     "QueryPerformanceCounter",
     "QueryPerformanceFrequency",
     "RaiseException",
     "ReadConsoleW",
+    "ReadFile",
     "ReleaseMutex",
     "ReleaseSRWLockExclusive",
     "RemoveDirectoryW",
@@ -1229,6 +1234,7 @@
     "SetFilePointerEx",
     "SetFileTime",
     "SetHandleInformation",
+    "SetLastError",
     "SetStdHandle",
     "SetThreadPriority",
     "SetUnhandledExceptionFilter",
@@ -1240,8 +1246,6 @@
     "SystemTimeToFileTime",
     "SystemTimeToTzSpecificLocalTime",
     "TerminateProcess",
-    "Thread32First",
-    "Thread32Next",
     "TlsAlloc",
     "TlsFree",
     "TlsGetValue",
@@ -1264,22 +1268,18 @@
     "WakeConditionVariable",
     "WideCharToMultiByte",
     "WriteConsoleW",
+    "WriteFile",
     "lstrlenW"
    ],
-   "x64": [
-    "ExitProcess",
-    "GetCurrentProcessId",
-    "GetLastError",
-    "GetModuleHandleA",
-    "GetModuleHandleW",
-    "GetStdHandle",
-    "ReadFile",
-    "SetLastError",
-    "WriteFile"
+   "32-only": [
+    "GetModuleHandleExA",
+    "OpenThread",
+    "Thread32First",
+    "Thread32Next"
    ]
   },
   "advapi32.dll": {
-   "32-only": [
+   "x64": [
     "CryptAcquireContextW",
     "CryptCreateHash",
     "CryptDestroyHash",
@@ -1343,7 +1343,7 @@
    ]
   },
   "user32.dll": {
-   "32-only": [
+   "x64": [
     "CreateWindowExW",
     "DefWindowProcW",
     "DestroyWindow",
@@ -1368,7 +1368,7 @@
    ]
   },
   "ws2_32.dll": {
-   "32-only": [
+   "x64": [
     "WSACleanup",
     "WSACloseEvent",
     "WSACreateEvent",
@@ -1438,7 +1438,7 @@
     "SafeArrayGetElement",
     "VariantChangeType"
    ],
-   "32-only": [
+   "x64": [
     "GetErrorInfo",
     "SysFreeString",
     "SysStringLen",
@@ -1446,7 +1446,7 @@
    ]
   },
   "ole32.dll": {
-   "32-only": [
+   "x64": [
     "CoCreateInstance",
     "CoInitializeEx",
     "CoUninitialize",
@@ -1489,7 +1489,7 @@
     "CryptInstallOIDFunctionAddress",
     "CryptVerifyCertificateSignatureEx"
    ],
-   "32-only": [
+   "x64": [
     "CertCloseStore",
     "CertCreateCertificateChainEngine",
     "CertFreeCTLContext",
@@ -1505,12 +1505,12 @@
     "NtReadFile",
     "NtWriteFile"
    ],
-   "32-only": [
+   "x64": [
     "RtlNtStatusToDosError"
    ]
   },
   "vcruntime140.dll": {
-   "32-only": [
+   "x64": [
     "_CxxThrowException",
     "__C_specific_handler",
     "memchr",
@@ -1529,7 +1529,7 @@
    ]
   },
   "api-ms-win-crt-string-l1-1-0.dll": {
-   "32-only": [
+   "x64": [
     "_stricmp",
     "_strnicmp",
     "isspace",
@@ -1559,12 +1559,12 @@
     "sinf",
     "truncf"
    ],
-   "32-only": [
+   "x64": [
     "_fdopen"
    ]
   },
   "api-ms-win-crt-heap-l1-1-0.dll": {
-   "32-only": [
+   "x64": [
     "calloc",
     "free",
     "malloc",
@@ -1583,7 +1583,7 @@
     "_wfopen",
     "fopen_s"
    ],
-   "32-only": [
+   "x64": [
     "__acrt_iob_func",
     "_fileno",
     "_setmode",
@@ -1617,7 +1617,7 @@
     "raise",
     "strerror_s"
    ],
-   "32-only": [
+   "x64": [
     "_cexit",
     "_errno",
     "_exit",
@@ -1627,7 +1627,7 @@
    ]
   },
   "api-ms-win-crt-utility-l1-1-0.dll": {
-   "32-only": [
+   "x64": [
     "qsort"
    ],
    "missing": [
@@ -1635,7 +1635,7 @@
    ]
   },
   "api-ms-win-crt-convert-l1-1-0.dll": {
-   "32-only": [
+   "x64": [
     "atoi",
     "strtol",
     "strtoul"
@@ -1646,13 +1646,13 @@
     "_gmtime64_s",
     "_localtime64_s"
    ],
-   "32-only": [
+   "x64": [
     "_time64",
     "strftime"
    ]
   },
   "api-ms-win-crt-environment-l1-1-0.dll": {
-   "32-only": [
+   "x64": [
     "getenv"
    ]
   },
@@ -1673,19 +1673,19 @@
    ]
   },
   "shell32.dll": {
-   "32-only": [
+   "x64": [
     "CommandLineToArgvW"
    ]
   },
   "winmm.dll": {
-   "32-only": [
+   "x64": [
     "timeBeginPeriod",
     "timeEndPeriod",
     "timeGetTime"
    ]
   },
   "shlwapi.dll": {
-   "32-only": [
+   "x64": [
     "PathMatchSpecW"
    ]
   },
@@ -1696,7 +1696,7 @@
     "WinHttpOpen",
     "WinHttpSetTimeouts"
    ],
-   "32-only": [
+   "x64": [
     "WinHttpGetIEProxyConfigForCurrentUser"
    ]
   },
@@ -1708,7 +1708,7 @@
  },
  "totals": {
   "missing": 198,
-  "32-only": 333,
-  "x64": 9
+  "x64": 338,
+  "32-only": 4
  }
 }
