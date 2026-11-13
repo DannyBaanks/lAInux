@@ -78,7 +78,13 @@ CFG is tolerated (guard check pointers stay at their in-image defaults).
 
 1. ~~x64 DLL load~~ **done** (WINS `aaf3aa0`): map, relocate, bind across images, TLS
    callbacks + DllMain, per-image TLS, GS TEB/PEB. SEH table registration pending.
-2. `liblark.dll`: resolve + call `lark_sdk_version` (pure, no I/O) → first proof.
+2. ~~`liblark.dll`: call `lark_sdk_version`~~ **done** (WINS `4abfb4b`, 2026-11-13): liblark +
+   sscronet run CRT init, TLS callbacks and DllMain under winload64 and
+   `lark_sdk_version(&out)` returns `cd59a1aa_8.4.0`, **identical to the real Windows
+   loader under Wine**. No Wine in the run. Needed: module registry (GetModuleHandle/
+   GetProcAddress were stubs), Windows VM model (PartitionAlloc), futex SRW/CS/condvars/
+   WaitOnAddress, UCRT startup/math/stdio, and two WINS bugs fixed (msvcrt shim used the
+   SysV ABI on x86-64; printf ignored MSVC widths). 162 imports still trapped, none hit.
 3. `lark_sdk_pre_init` / `lark_sdk_init_pc` with sscronet loaded; differential oracle =
    the same calls under Wine (WINS rule).
 4. Sockets/TLS: ws2_32 + iphlpapi + crypt32 via winluxtrust; a login round-trip.
