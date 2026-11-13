@@ -28,6 +28,15 @@ python3 lib/pak.py --extract-tree /tmp/dola-ui  <Dola>/local_webcontents/biz/biz
 DOLA_UI_DIR=/tmp/dola-ui  electron apps/dola/host          # DOLA_HOST_LOG=file to trace
 ```
 
-Not yet: login window (`browserWindow.popupLoginWindow`), `dola://` / `chrome://` views
+Login (2026-11-13): "Iniciar sesión" → the UI asks the hidden background page
+(`dola://dola-background`, served from the bundle) over neotixChannel RPC
+(`rfc-request`/`rfc-response`, envelope `{type, data}`), which calls
+`browserWindow.popupLoginWindow`; the host opens the bundle's login entry (`/login`, the
+desktop view behind `/client-login-modal`) in a modal window: Google / Facebook / phone /
+Apple / QR. `tabs.getHomeTabCookie` reads the real session cookies (passport CSRF). When
+the login window closes the main view reloads (the session lives in shared cookies).
+Verified up to the login screen; an actual sign-in needs the user's account.
+
+Not yet: `chrome://` views
 (audio recorder, ai-views popups), entry-moa/entry-main JS apps, packaging as a recipe
 (`transmute.sh dola`) with a pinned official Electron.

@@ -65,13 +65,24 @@ function member(path) {
 globalThis.neotix = member("");
 
 // ---- neotixChannel: in-window events now, routed across windows by the main process
+// Messages carry any number of arguments: broadcast(event, scope, payload) is what the
+// UI's RPC ("rfc-request"/"rfc-response") uses.
 const channel = new Map();
-ipcRenderer.on("neotix-channel", (_e, name, data) => {
-  for (const h of channel.get(name) || []) try { h(data); } catch {}
+const plain = (v) => JSON.parse(JSON.stringify(v ?? null));
+// Listeners receive an envelope { type, data, senderToken }: broadcast(event, type, data)
+// and sendToTargets(tokens, event, type, data) put their 2nd/3rd arguments there.
+ipcRenderer.on("neotix-channel", (_e, name, args, senderToken) => {
+  const env = args.length > 1 ? { type: args[0], data: args[1], senderToken } : { type: "", data: args[0], senderToken };
+  for (const h of channel.get(name) || []) try { h(env); } catch {}
 });
 globalThis.neotixChannel = {
   on(name, handler) { (channel.get(name) || channel.set(name, new Set()).get(name)).add(handler); },
-  once(name, handler) { const w = (d) => { this.off(name, w); handler(d); }; this.on(name, w); },
+  once(name, handler) { const w = (...a) => { this.off(name, w); handler(...a); }; this.on(name, w); },
   off(name, handler) { channel.get(name)?.delete(handler); },
-  emit(name, data) { ipcRenderer.send("neotix-channel", name, JSON.parse(JSON.stringify(data ?? null))); },
+  emit(name, ...args) { ipcRenderer.send("neotix-channel", name, args.map(plain), null); },
+  async broadcast(name, ...args) { ipcRenderer.send("neotix-channel", name, args.map(plain), null); return true; },
+  async sendToTargets(tokens, name, ...args) {
+    ipcRenderer.send("neotix-channel", name, args.map(plain), Array.isArray(tokens) ? tokens : [tokens]);
+    return true;
+  },
 };

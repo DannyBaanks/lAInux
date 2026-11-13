@@ -85,7 +85,15 @@ const HOST = {
   device: { getDeviceInfo: () => ({ deviceId: store.device.deviceId, installId: store.device.installId, platform: "linux" }) },
   startupMetric: { getNativeStartupCostMS: () => 0, setWebviewStartupEvent: () => true },
   audioRecorder: { setLibraExpEnabled: () => true },
-  pageLoadEvent: { setPageLoadErrorEvent: ([ev]) => { log(`PAGE-ERROR ${JSON.stringify(ev).slice(0, 400)}`); return true; } },
+  // Cookies of the main (home) tab: the login view reads passport_csrf_token here.
+  tabs: {
+    getHomeTabCookie: async ([a]) => {
+      const name = a && a.key;
+      const [c] = await session.defaultSession.cookies.get({ url: "https://www.dola.com", name });
+      return { cookie: c ? c.value : "" };
+    },
+  },
+  pageLoadEvent: { setPageLoadErrorEvent: ([ev]) => { log(`PAGE-ERROR ${JSON.stringify(ev).slice(0, 600)}`); return true; } },
   localStorage: bizKV("localStorage"),
   localStorageApp: bizKV("localStorageApp"),
   log: { writeLog: () => undefined },
@@ -98,13 +106,60 @@ ipcMain.handle("towel", async (_e, method, payload) => {
   log(`TOWEL ${method} ${JSON.stringify(payload).slice(0, 200)}`);
   return [false, { success: false, is_error: true, error_message: "backend disabled" }];
 });
-ipcMain.on("neotix-channel", (e, name, data) => {
-  for (const w of BrowserWindow.getAllWindows()) w.webContents.send("neotix-channel", name, data);
+ipcMain.on("neotix-channel", (e, name, args, tokens) => {
+  for (const c of contexts.values()) {
+    if (Array.isArray(tokens) && !tokens.includes(c.token)) continue;
+    if (!c.win.isDestroyed()) c.win.webContents.send("neotix-channel", name, args, (contexts.get(e.sender.id) || {}).token || "");
+  }
+  log(`CHANNEL ${name} -> ${Array.isArray(tokens) ? tokens.length + " target(s)" : "all"} ${JSON.stringify(args).slice(0, 300)}`);
 });
 const misses = new Map();
+const ctxOf = (w) => contexts.get(w.webContents.id);
 const HOST_WIN = {
   window: { setTitle: (w, [a]) => { w.setTitle(String(a && a.title || "Dola")); return true; } },
   webPage: { getZoom: (w) => w.webContents.getZoomFactor() },
+  windowContext: {
+    getHandlerToken: (w) => ctxOf(w)?.token,
+    getWindowContextInfo: (_w, [name]) => {
+      for (const c of contexts.values()) if (c.name === name) return { token: c.token, name: c.name };
+      throw new Error(`no window context ${name}`);
+    },
+  },
+  browserWindow: {
+    // args: { entry, feature, afterLoginToUrl, loginUrl?, extraQuery?, closeWhenClickMask }
+    popupLoginWindow: (w, [a]) => {
+      if (loginWin && !loginWin.isDestroyed()) { loginWin.focus(); return true; }
+      // The desktop login view is the bundle's "login" entry (entry-client-login, routed
+      // at /login); /client-login-modal does not exist on the public site.
+      const u = new URL((a && a.loginUrl) || "https://www.dola.com/client-login-modal");
+      if (u.hostname === "www.dola.com" && u.pathname.startsWith("/client-login-modal")) u.pathname = "/login";
+      const url = u.toString();
+      log(`LOGIN open ${url}`);
+      loginWin = newWindow({ width: 460, height: 640, parent: w, modal: true, title: "Dola", autoHideMenuBar: true }, "login_view");
+      loginWin.on("closed", () => {
+        loginWin = null;
+        // The session lives in shared cookies: reload so the main view picks it up even
+        // if no channel event announced the login.
+        if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.reload();
+      });
+      loginWin.loadURL(url);
+      if (process.env.DOLA_HOST_LOGIN_SHOT) {   // test hook: screenshot the login window
+        loginWin.webContents.once("did-finish-load", () => setTimeout(async () => {
+          if (!loginWin || loginWin.isDestroyed()) return;
+          fs.writeFileSync(process.env.DOLA_HOST_LOGIN_SHOT, (await loginWin.webContents.capturePage()).toPNG());
+          log("LOGIN screenshot written");
+        }, 7000));
+      }
+      return true;
+    },
+    closeLoginWindow: () => { if (loginWin && !loginWin.isDestroyed()) loginWin.close(); return true; },
+    resizeLoginWindow: (_w, [a]) => {
+      if (loginWin && a && a.width && a.height) loginWin.setContentSize(Math.round(a.width), Math.round(a.height));
+      return true;
+    },
+    updateLoginWindowConfig: () => true,
+    setLoginWindowIgnoreResize: () => true,
+  },
 };
 ipcMain.handle("neotix", async (e, ns, method, args) => {
   const fw = HOST_WIN[ns] && HOST_WIN[ns][method];
@@ -112,7 +167,8 @@ ipcMain.handle("neotix", async (e, ns, method, args) => {
   const f = HOST[ns] && HOST[ns][method];
   if (!f) {
     const k = `${ns}.${method}`;
-    if (!misses.has(k)) log(`NEOTIX-MISS ${k} ${JSON.stringify(args).slice(0, 300)}`);
+    const who = (contexts.get(e.sender.id) || {}).name || "?";
+    if (!misses.has(k)) log(`NEOTIX-MISS[${who}] ${k} ${JSON.stringify(args).slice(0, 300)}`);
     misses.set(k, (misses.get(k) || 0) + 1);
     return { miss: true };
   }
@@ -120,7 +176,47 @@ ipcMain.handle("neotix", async (e, ns, method, args) => {
   catch (e) { log(`NEOTIX-ERR ${ns}.${method} ${e && e.message}`); return { error: String(e && e.message || e) }; }
 });
 
+// dola:// is Dola's scheme for its own desktop views (dola://dola-login/login,
+// dola://dola-audio-recorder, ...): host "dola-<entry>" serves the bundle's <entry>/ app,
+// with root-relative assets (/static/...) from the bundle root.
+protocol.registerSchemesAsPrivileged([{ scheme: "dola", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, allowServiceWorkers: true } }]);
+function dolaFile(u) {
+  const entry = u.hostname.replace(/^dola-/, "");
+  const direct = localFile(u.pathname);
+  if (direct && !direct.endsWith(path.sep + "index.html")) return direct;     // a real asset
+  const idx = path.join(UI, entry, "index.html");
+  return fs.existsSync(idx) ? idx : direct;
+}
+
+// ------------------------------------------------------------------ windows
+// Every window gets a context name and a token (neotix.windowContext); the channel
+// routes events by token (sendToTargets) or to all windows (broadcast).
+const contexts = new Map(); // webContents.id -> { name, token, win }
+function registerWindow(win, name) {
+  contexts.set(win.webContents.id, { name, token: crypto.randomUUID(), win });
+  win.on("closed", () => { for (const [k, v] of contexts) if (v.win === win) contexts.delete(k); });
+}
+function newWindow(opts, name) {
+  const win = new BrowserWindow({ ...opts, show: opts.show ?? !process.env.DOLA_HOST_HIDDEN,
+    webPreferences: { contextIsolation: false, sandbox: false, nodeIntegration: false, preload: path.join(__dirname, "preload.js") } });
+  registerWindow(win, name);
+  win.webContents.on("console-message", (...a) => {
+    const e = a[0] && typeof a[0].message === "string" ? a[0] : { level: a[1], message: a[2], sourceId: a[4], lineNumber: a[3] };
+    log(`CONSOLE[${name}:${e.level}] ${String(e.message).slice(0, 300)}`);
+  });
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => log(`FAIL[${name}] ${code} ${desc} ${url}`));
+  return win;
+}
+let mainWin = null, loginWin = null;
+
 app.whenReady().then(() => {
+  session.defaultSession.protocol.handle("dola", async (req) => {
+    const u = new URL(req.url);
+    const f = dolaFile(u);
+    log(`DOLA ${u.hostname}${u.pathname} -> ${f ? path.relative(UI, f) : "404"}`);
+    if (!f) return new Response("not found", { status: 404 });
+    return new Response(fs.readFileSync(f), { headers: { "content-type": MIME[path.extname(f)] || "application/octet-stream" } });
+  });
   session.defaultSession.protocol.handle("https", async (req) => {
     const u = new URL(req.url);
     if (ORIGIN_HOSTS.has(u.hostname) && req.method === "GET") {
@@ -138,13 +234,11 @@ app.whenReady().then(() => {
     }
     return net.fetch(req, { bypassCustomProtocolHandlers: true });
   });
-  const win = new BrowserWindow({ width: 1280, height: 800, show: !process.env.DOLA_HOST_HIDDEN,
-    webPreferences: { contextIsolation: false, sandbox: false, nodeIntegration: false, preload: path.join(__dirname, "preload.js") } });
-  win.webContents.on("console-message", (...a) => {
-    const e = a[0] && typeof a[0].message === "string" ? a[0] : { level: a[1], message: a[2], sourceId: a[4], lineNumber: a[3] };
-    log(`CONSOLE[${e.level}] ${String(e.message).slice(0, 400)}  (${e.sourceId}:${e.lineNumber})`);
-  });
-  win.webContents.on("did-fail-load", (_e, code, desc, url) => log(`FAIL ${code} ${desc} ${url}`));
+  // Dola's hidden background page (dola://dola-background): serves "AgentBackground"
+  // RPCs (rfc-request) for the visible windows, as the Windows host keeps it running.
+  const bg = newWindow({ width: 800, height: 600, show: false }, "background");
+  bg.loadURL("dola://dola-background/");
+  const win = mainWin = newWindow({ width: 1280, height: 800, title: "Dola" }, "chat_view");
   win.loadURL("https://www.dola.com/chat/");
   if (process.env.DOLA_HOST_SHOT) {
     setTimeout(async () => {
