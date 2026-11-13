@@ -91,3 +91,15 @@ CFG is tolerated (guard check pointers stay at their in-image defaults).
 
 NOT_DEMONSTRATED: any execution of vendor code outside Wine; that the 333 "32-only"
 names are complete; the protobuf command set behind `CallAsyncWithServerPB`.
+
+## Finding 2026-11-13: Dola does not use liblark today
+
+Running the real Dola (Wine build, hidden Xvfb, capture proxy in place of liblark.dll)
+logs `BackendService::OnLoadLibraryComplete failed to load liblark: Backend is disabled
+by cached configuration` and the app works fully (UI, chat, Work, login button).
+`lark_sdk_init_pc` is never called; sscronet.dll is loaded by Cici.dll for networking.
+So the liblark/CallAsync transport serves features ByteDance keeps off in Dola (IM,
+Feishu, Office…; likely on in Chinese Doubao). The InitSDKRequest schema
+(`basic.v1.InitSDKRequest`, protobuf-lite in Cici.dll, prost in liblark) was not needed.
+Consequence for Plan A: the Linux host must support the "backend disabled" path first;
+liblark under winload64 stays as the route for Doubao / when the backend is enabled.
