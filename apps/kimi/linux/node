@@ -1,0 +1,7 @@
+#!/bin/sh
+# lAInux: Kimi's desktop Node runtime. On Windows node.cmd runs
+# %KIMI_DESKTOP_RUNTIME_NODE% (Kimi.exe). On Linux Kimi points that variable at
+# this very script, so it is not consulted: the Node here is the Linux Electron
+# binary at the install root (resources/resources/runtime -> ../../..), run as Node.
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ELECTRON_RUN_AS_NODE=1 exec "$here/../../../kimi" "$@"

@@ -2,13 +2,13 @@
 
 **AI apps, but make them Linux.** 🐧
 
-Five reproducible recipes to adapt AI desktop applications that lack an official Linux build for the targeted package versions. lAInux works **locally, on your machine**, using vendor-provided inputs and auditable scripts—not repackaged proprietary applications.
+Six reproducible recipes to adapt AI desktop applications that lack an official Linux build for the targeted package versions. lAInux works **locally, on your machine**, using vendor-provided inputs and auditable scripts—not repackaged proprietary applications.
 
-*En español: cinco recetas para llevar clientes de IA a Linux sin redistribuir los binarios propietarios de sus fabricantes.*
+*En español: seis recetas para llevar clientes de IA a Linux sin redistribuir los binarios propietarios de sus fabricantes.*
 
-**The five-app milestone (2026-11-14):** Qwen · Manus · Dola · Gemini desktop · Doubao.
+**The six-app milestone (2026-11-14):** Qwen · Manus · Dola · Gemini desktop · Doubao · Kimi.
 
-> **What the milestone means:** all five have recipes committed to this corpus. It does **not** mean every feature, account-login path or desktop integration has been validated. [See the evidence-based compatibility matrix](docs/COMPATIBILITY.md).
+> **What the milestone means:** all six have recipes committed to this corpus. It does **not** mean every feature, account-login path or desktop integration has been validated. [See the evidence-based compatibility matrix](docs/COMPATIBILITY.md).
 
 ### Explore the project
 
@@ -23,7 +23,7 @@ A Windows-only installer does not always imply Windows-only application logic. S
 
 **Ground rules:** no vendor-owned binaries in Git; pin and verify upstream inputs; fail closed on unexpected changes; stage installs with rollback; preserve the user's profile. A Linux-native window is not necessarily sandboxed or fully feature-compatible.
 
-## The five recipes
+## The six recipes
 
 Each app gets a recipe under `apps/<app>/`. A recipe takes the vendor's official
 Windows package, fetches everything else from its official source, verifies each
@@ -39,8 +39,9 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 | **Dola** (intl. Doubao) | `biz.pak` from your Dola install (folder, the `.pak`, or an AppImage that bundles it) | Dola's own UI on Linux Electron 45 + the lAInux host (original code); third-party sign-in in your default browser | [`apps/dola`](apps/dola/README.md) |
 | **Doubao 豆包** | Doubao's package from its CDN (we fetch it, pinned to the MD5 its update API publishes + our SHA-256) | Doubao's own UI on Linux Electron 45 + the same lAInux host as Dola (brand `doubao`) | [`apps/doubao`](apps/doubao/transmute.sh) |
 | **Gemini desktop** | Google's package from `dl.google.com` (we fetch it, pinned to the hash Google's update server publishes) | Linux Electron 44 + untouched `app.asar`; Google sign-in inside the app | [`apps/gemini`](apps/gemini/README.md) |
+| **Kimi + Kimi Work** | Moonshot's installer from its CDN (we fetch it, pinned to the MD5 its CDN serves + our SHA-256) | Linux Electron 43 + untouched `app.asar`; Kimi Work's local agent (daimon) on Linux CPython/uv with Kimi's Electron as Node; Google sign-in in your default browser | [`apps/kimi`](apps/kimi/README.md) |
 
-The matrix above describes the **adaptation strategy**, not an unconditional full-support claim. For known limitations—including Qwen's sandbox configuration, Manus's hybrid companion path, Dola's desktop popups, Gemini's Windows-only helpers and Doubao's unverified interactive login—read [Compatibility & evidence](docs/COMPATIBILITY.md).
+The matrix above describes the **adaptation strategy**, not an unconditional full-support claim. For known limitations—including Qwen's sandbox configuration, Manus's hybrid companion path, Dola's desktop popups, Gemini's Windows-only helpers, Doubao's unverified interactive login and Kimi Claw (not on Linux yet)—read [Compatibility & evidence](docs/COMPATIBILITY.md).
 
 ## Quick start
 
@@ -51,12 +52,13 @@ The matrix above describes the **adaptation strategy**, not an unconditional ful
 ./transmute.sh dola ~/Applications/Dola-Wine-1.0.0-x86_64.AppImage   # or your Dola folder / its biz.pak
 ./transmute.sh gemini                # fetches Google's package, verifies it, installs
 ./transmute.sh doubao                # fetches Doubao's package, verifies it, installs
+./transmute.sh kimi                  # fetches Moonshot's installer, verifies it, installs
 ./transmute.sh <app> --uninstall    # removes the install, keeps ~/.config/<App>
 ```
 
 ## ⚖️ Legal Disclaimer & Notice of Non-Affiliation
 
-1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen, Manus AI, ByteDance / Dola and Doubao and Google / Gemini).
+1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen, Manus AI, ByteDance / Dola and Doubao and Google / Gemini and Moonshot AI / Kimi).
 2. **Trademarks:** All product names, marks and images belong to their respective owners.
 3. **Zero Redistribution:** The repository contains only original automation scripts, text patches and checksums. Vendor files are obtained by the end user from the vendor's official channels and transformed locally on the user's own machine.
 4. **User Compliance:** Review and comply with each vendor's Terms of Service and license before downloading and running its client.

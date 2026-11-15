@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# lAInux: Linux counterpart of the bundle's bin/daimon.ps1 (first-run setup, then the
+# control server until a Kimi Code key exists, then the full daemon).
+set -euo pipefail
+bundle=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+node=${DAIMON_BUNDLE_NODE_BIN:-${DAIMON_NODE_BIN:-}}
+case "${1:-}" in
+  --node|--node-bin) [[ $# -ge 2 ]] || { echo "Daimon bundle launcher expected a value after $1." >&2; exit 64; }
+                     node=$2; shift 2 ;;
+  --node=*) node=${1#--node=}; shift ;;
+  --node-bin=*) node=${1#--node-bin=}; shift ;;
+esac
+[[ -n "$node" ]] || { echo "Daimon bundle requires Node v24.15.0. Pass --node <path> or set DAIMON_BUNDLE_NODE_BIN." >&2; exit 127; }
+[[ -e "$node" ]] || node=$(command -v -- "$node") || { echo "Daimon bundle Node command was not found." >&2; exit 127; }
+node=$(realpath -- "$node")
+export DAIMON_BUNDLE_NODE_BIN=$node
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --background-python-sync) export DAIMON_PYTHON_RUNTIME_BACKGROUND_SYNC=1; shift; continue ;;
+    --) shift ;;
+  esac
+  break
+done
+kd=$bundle/bin/kimi-daimon
+manifest=$bundle/release/manifest.json
+share=${KIMI_SHARE_DIR:-$HOME/.kimi}
+export DAIMON_CONFIG_PATH=${DAIMON_CONFIG_PATH:-$share/daimon/config.json}
+export PATH="$(dirname -- "$node"):$bundle/runtime/uv:$PATH"
+setup_flags=(--no-daemon --skip-webbridge --skip-system-tools)
+has_key() {
+  "$node" -e 'const fs=require("node:fs");let c;try{c=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))}catch{process.exit(1)}const p=c?.model?.providers?.["daimon-kimi-code"];const k=c?.credentials?.kimiCode?.apiKey??p?.apiKey;process.exit(typeof k==="string"&&k.trim().length>0?0:1)' "$DAIMON_CONFIG_PATH"
+}
+cmd=${1:-start}; [[ $# -gt 0 ]] && shift
+case "$cmd" in
+  prepare) exec "$kd" setup --release "$manifest" "${setup_flags[@]}" "$@" ;;
+  start|serve)
+    if [[ ! -f "$DAIMON_CONFIG_PATH" || "${DAIMON_BUNDLE_FORCE_SETUP:-}" == 1 ]]; then
+      "$kd" setup --release "$manifest" "${setup_flags[@]}"
+    fi
+    if has_key; then exec "$kd" start --control "$@"; fi
+    exec "$kd" control serve "$@" ;;
+  control) exec "$kd" control serve "$@" ;;
+  runtime) exec "$kd" start --control "$@" ;;
+  cli) exec "$kd" "$@" ;;
+  *) exec "$kd" "$cmd" "$@" ;;
+esac
