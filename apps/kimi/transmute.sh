@@ -156,6 +156,20 @@ cp -a "$PKG_RES/." "$APP/resources/"
 rm -rf -- "$STAGE/pkg"
 R="$APP/resources/resources"
 
+# lAInux boot (apps/kimi/linux/app): Electron loads resources/app before app.asar; it
+# fixes window resizing on Linux and then imports Moonshot's untouched main. Its
+# package.json carries app.asar's name and version, which Electron reports as the app's.
+mkdir -p "$APP/resources/app"
+cp "$APP_DIR/linux/app/lainux-boot.mjs" "$APP/resources/app/"
+python3 -I "$CORPUS_ROOT/lib/asar.py" --extract "$APP/resources/app.asar" package.json "$STAGE/asar-package.json"
+python3 -I - "$STAGE/asar-package.json" "$APP/resources/app/package.json" <<'EOF'
+import json, sys
+src = json.load(open(sys.argv[1], encoding="utf-8"))
+boot = {k: src[k] for k in ("name", "productName", "version", "description", "author") if k in src}
+boot.update({"type": "module", "main": "lainux-boot.mjs"})
+json.dump(boot, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
+EOF
+
 # Kimi's desktop Node runtime: node/npm/npx run Kimi's Electron as Node.
 cp "$APP_DIR/linux/node" "$APP_DIR/linux/npm" "$APP_DIR/linux/npx" "$R/runtime/"
 chmod +x "$R/runtime/node" "$R/runtime/npm" "$R/runtime/npx"

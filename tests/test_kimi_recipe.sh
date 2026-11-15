@@ -51,7 +51,14 @@ if [[ "$out" == "$b/runtime/uv/uv|$b/runtime/python/cpython-3.12/bin/python3|$b/
     ok "daimon control -> kimi-daimon control serve with Linux runtimes"
 else bad "daimon launcher: $out"; fi
 
-# 5. Pins are SHA-256 and the installer comes from Moonshot's CDN over https.
+# 5. The lAInux boot re-emits "resize" on Linux and then imports app.asar's main.
+boot="$ROOT/apps/kimi/linux/app/lainux-boot.mjs"
+if node --check "$boot" 2>/dev/null && grep -q 'emit.call(this, "resize")' "$boot" \
+   && grep -q '"app.asar", "out", "main", "index.js"' "$boot"; then
+    ok "lainux-boot.mjs parses, re-emits resize, imports the untouched main"
+else bad "lainux-boot.mjs"; fi
+
+# 6. Pins are SHA-256 and the installer comes from Moonshot's CDN over https.
 source "$ROOT/apps/kimi/pins.env"
 good=true
 for v in KIMI_EXE_SHA256 ELECTRON_SHA256 PYTHON_SHA256 UV_SHA256 JIEBA_SHA256; do

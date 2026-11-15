@@ -17,6 +17,9 @@ Kimi's Windows build is a plain Electron 43 app, so the recipe can use most of i
   - The recipe builds that folder from the package's `daimon-core.tar.gz`, then adds the Linux builds of CPython 3.12 (python-build-standalone 20261110), uv and jieba's addon, all pinned.
   - It also adds `bin/daimon` and `bin/kimi-daimon` from [`linux/`](linux). They are original bash counterparts of the bundle's PowerShell launchers.
 - **Node:** Kimi runs its own Electron as Node. The Windows `node.cmd` does this through `%KIMI_DESKTOP_RUNTIME_NODE%`. On Linux, Kimi points that variable at `runtime/node` itself, so [`linux/node`](linux/node) ignores it and runs `../../../kimi` with `ELECTRON_RUN_AS_NODE=1`.
+- **Window resizing:** on Linux (X11), `getContentSize()` inside a `resize` event still returns the previous size. Kimi lays out its views from it, so they stayed one step behind: a maximized window kept the small view, and a restored one kept the maximized view with its buttons off screen.
+  - [`linux/app/lainux-boot.mjs`](linux/app/lainux-boot.mjs) fixes this. Electron loads `resources/app` before `app.asar`, so this file runs first: it re-emits `resize` once the size has settled, then imports Moonshot's untouched `out/main/index.js` from `app.asar`.
+  - Its `package.json` copies `app.asar`'s name and version.
 - **git:** Kimi Work uses the system's `git`. The Windows package bundles Git for Windows instead.
 
 ## Profile and data
