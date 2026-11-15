@@ -1,0 +1,60 @@
+# Dola on Linux (lAInux) — host v0
+
+Dola (international Doubao) runs its **own desktop UI** in Linux Electron, with no Wine:
+the UI bundle comes from the vendor's `biz.pak` on the user's machine; everything in
+`host/` is original code.
+
+```
+host/main.js     https://www.dola.com/** served from the local bundle (route.json SPA
+                 routes + files), everything else passed to the network; window; neotix host
+host/preload.js  window.neotix (Proxy over IPC), window.neotixChannel, towel access points
+```
+
+Status (2026-11-13, measured in a hidden Xvfb window):
+- the main chat window renders (es-MX locale, system color scheme), 582 bundle files served
+  locally, API calls go to Dola's servers;
+- sending a message reaches the server: Dola answers with its age confirmation (18+),
+  which only the user may accept;
+- the liblark backend is disabled in Dola by remote config, so access-point calls answer
+  `backend disabled` exactly like Cici.dll;
+- of ~880 `neotix` methods the UI knows, the startup path calls ~35: the implemented ones
+  are in `HOST`/`HOST_WIN`; any other answers `No such method!` (the UI's own
+  "not supported" path) and is logged as `NEOTIX-MISS` with DOLA_HOST_LOG set.
+
+Install it (recipe, 2026-11-14):
+
+```bash
+./transmute.sh dola <Dola install folder | biz.pak | Dola AppImage>
+dola                                   # launcher; DOLA_HOST_LOG=file to trace
+./transmute.sh dola --uninstall        # keeps ~/.config/dola-linux-host (your session)
+```
+
+The recipe verifies `biz.pak` against `pins.env` (Dola's online installer resolves the
+client at runtime, so there is no fixed vendor URL to pin), installs the official Linux
+Electron 45.2.3, copies `host/` to `resources/app` and extracts the UI to
+`resources/dola-ui`, where the host finds it when `DOLA_UI_DIR` is unset. An AppImage is
+only read with `unsquashfs`, never executed.
+
+For development on the checkout instead: `DOLA_UI_DIR=<extracted biz/> apps/dola/run-dev.sh`.
+
+Login (2026-11-13): "Iniciar sesión" → the UI asks the hidden background page
+(`dola://dola-background`, served from the bundle) over neotixChannel RPC
+(`rfc-request`/`rfc-response`, envelope `{type, data}`), which calls
+`browserWindow.popupLoginWindow`; the host opens the bundle's login entry (`/login`, the
+desktop view behind `/client-login-modal`) in a modal window: Google / Facebook / phone /
+Apple / QR. `tabs.getHomeTabCookie` reads the real session cookies (passport CSRF). When
+the login window closes the main view reloads (the session lives in shared cookies).
+Third-party sign-in (2026-11-14, verified with a real Google account): Google refuses both
+embedded browsers and real browsers started with `--remote-debugging-port` ("this browser
+or app may not be secure"). So a click on Google/Apple/Facebook/… opens the user's
+**default browser** (xdg; Chromium family, `DOLA_LOGIN_BROWSER` overrides) as a plain
+browser — no debugging port, nothing automated — on `www.dola.com`, in its own profile
+(`<userData>/login-browser-<browser>`, `--password-store=basic`). The user signs in on the
+website; the desktop UI *is* www.dola.com, so its session is the app's session. The host
+reads that profile's cookie DB (a copy; Chromium flushes it about every 30 s, and on
+close), decrypts it (v10, basic key), copies the dola.com cookies into the app session,
+closes that browser (main pid from the profile's `SingletonLock`, checked against its
+command line) and reloads.
+
+Not yet: `chrome://` views
+(audio recorder, ai-views popups), entry-moa/entry-main JS apps.
