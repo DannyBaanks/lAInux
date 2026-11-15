@@ -6,7 +6,8 @@
 # Input : Moonshot's official Windows installer, fetched from Moonshot's CDN and
 #         pinned (or --exe FILE).
 # Output: ~/.local/share/kimi-desktop - the official Linux Electron runtime running
-#         Moonshot's untouched app.asar, with Kimi Work's local agent ("daimon",
+#         Moonshot's untouched app.asar (behind a small lAInux boot that fixes window
+#         resizing on Linux), with Kimi Work's local agent ("daimon",
 #         JavaScript) assembled for Linux: Kimi's Electron as its Node, Linux CPython
 #         and uv, Linux jieba addon, and launchers in apps/kimi/linux (original code,
 #         the counterparts of the bundle's PowerShell launchers).
@@ -156,13 +157,20 @@ cp -a "$PKG_RES/." "$APP/resources/"
 rm -rf -- "$STAGE/pkg"
 R="$APP/resources/resources"
 
-# lAInux boot (apps/kimi/linux/app): Electron loads resources/app before app.asar; it
-# fixes window resizing on Linux and then imports Moonshot's untouched main. Its
-# package.json carries app.asar's name and version, which Electron reports as the app's.
-mkdir -p "$APP/resources/app"
-cp "$APP_DIR/linux/app/lainux-boot.mjs" "$APP/resources/app/"
-python3 -I "$CORPUS_ROOT/lib/asar.py" --extract "$APP/resources/app.asar" package.json "$STAGE/asar-package.json"
-python3 -I - "$STAGE/asar-package.json" "$APP/resources/app/package.json" <<'EOF'
+# lAInux boot (apps/kimi/linux/app): Electron 43 loads resources/app.asar before
+# resources/app, so the boot becomes the directory resources/app.asar and Moonshot's
+# untouched archive moves to resources/kimi/app.asar (+ .unpacked, whose "/app.asar/" ->
+# "/app.asar.unpacked/" path rewrite still holds). The boot fixes window resizing on Linux
+# and imports Kimi's main; its package.json carries the archive's name and version, which
+# Electron reports as the app's.
+KIMI_ASAR="$APP/resources/kimi/app.asar"
+mkdir -p "$APP/resources/kimi"
+mv "$APP/resources/app.asar" "$KIMI_ASAR"
+mv "$APP/resources/app.asar.unpacked" "$KIMI_ASAR.unpacked"
+mkdir -p "$APP/resources/app.asar"
+cp "$APP_DIR/linux/app/lainux-boot.mjs" "$APP/resources/app.asar/"
+python3 -I "$CORPUS_ROOT/lib/asar.py" --extract "$KIMI_ASAR" package.json "$STAGE/asar-package.json"
+python3 -I - "$STAGE/asar-package.json" "$APP/resources/app.asar/package.json" <<'EOF'
 import json, sys
 src = json.load(open(sys.argv[1], encoding="utf-8"))
 boot = {k: src[k] for k in ("name", "productName", "version", "description", "author") if k in src}
@@ -200,10 +208,10 @@ for f in bin/daimon app/daimon/dist/src/runner/cli.js release/manifest.json runt
     [[ -e "$B/$f" ]] || { log_err "daimon bundle incomplete: $f"; exit 1; }
 done
 
-ICON_IN_ASAR=$(python3 -I "$CORPUS_ROOT/lib/asar.py" --list "$APP/resources/app.asar" \
+ICON_IN_ASAR=$(python3 -I "$CORPUS_ROOT/lib/asar.py" --list "$KIMI_ASAR" \
     | awk -F'\t' '{print $NF}' | grep -m1 -E '^out/renderer/assets/kimi-app-icon-[^/]*\.png$' || true)
 if [[ -n "$ICON_IN_ASAR" ]]; then
-    python3 -I "$CORPUS_ROOT/lib/asar.py" --extract "$APP/resources/app.asar" "$ICON_IN_ASAR" "$APP/kimi.png"
+    python3 -I "$CORPUS_ROOT/lib/asar.py" --extract "$KIMI_ASAR" "$ICON_IN_ASAR" "$APP/kimi.png"
 fi
 
 # ---------------------------------------------------------------- swap in

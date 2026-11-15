@@ -51,10 +51,10 @@ if [[ "$out" == "$b/runtime/uv/uv|$b/runtime/python/cpython-3.12/bin/python3|$b/
     ok "daimon control -> kimi-daimon control serve with Linux runtimes"
 else bad "daimon launcher: $out"; fi
 
-# 5. The lAInux boot re-emits "resize" on Linux and then imports app.asar's main.
+# 5. The lAInux boot re-emits "resize" on Linux and then imports resources/kimi/app.asar's main.
 boot="$ROOT/apps/kimi/linux/app/lainux-boot.mjs"
 if node --check "$boot" 2>/dev/null && grep -q 'emit.call(this, "resize")' "$boot" \
-   && grep -q '"app.asar", "out", "main", "index.js"' "$boot"; then
+   && grep -q '"kimi", "app.asar", "out", "main", "index.js"' "$boot"; then
     ok "lainux-boot.mjs parses, re-emits resize, imports the untouched main"
 else bad "lainux-boot.mjs"; fi
 

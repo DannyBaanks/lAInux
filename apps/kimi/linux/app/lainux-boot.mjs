@@ -1,5 +1,8 @@
-// lAInux boot for Kimi on Linux. Electron loads resources/app before resources/app.asar;
-// this file fixes one Linux behaviour and then runs Moonshot's untouched main from app.asar.
+// lAInux boot for Kimi on Linux. Electron 43 loads resources/app.asar first (before
+// resources/app), so the recipe installs this boot as the directory resources/app.asar and
+// Moonshot's untouched archive as resources/kimi/app.asar (+ app.asar.unpacked): Kimi
+// derives its worker and addon paths by replacing "/app.asar/" with "/app.asar.unpacked/",
+// which keeps working there. This file fixes one Linux behaviour, then runs Kimi's main.
 //
 // On Linux (X11), inside a "resize" event BaseWindow.getContentSize() still returns the
 // size of the PREVIOUS event (measured on Electron 43.7.7: maximize reports 1952x1038
@@ -28,4 +31,4 @@ if (process.platform === "linux") {
   };
 }
 
-await import(pathToFileURL(join(process.resourcesPath, "app.asar", "out", "main", "index.js")).href);
+await import(pathToFileURL(join(process.resourcesPath, "kimi", "app.asar", "out", "main", "index.js")).href);
