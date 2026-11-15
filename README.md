@@ -14,17 +14,19 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 |---|---|---|---|
 | **Qwen Desktop** | NSIS `.exe` from `download.qwen.ai` | Linux Electron 35 + patched `app.asar`, MCP via host `bun`/`uv` | [`apps/qwen`](apps/qwen/transmute.sh) → `qwen-transmute.sh` |
 | **Manus Desktop** | Microsoft Store `.Msixbundle` (you supply it) | Linux Electron 43 + untouched `app.asar`; Windows-only companions re-hosted by [WINS](#wins-dependency) | [`apps/manus`](apps/manus/README.md) |
+| **Gemini desktop** | Google's package from `dl.google.com` (we fetch it, pinned to the hash Google's update server publishes) | Linux Electron 44 + untouched `app.asar`; Google sign-in inside the app | [`apps/gemini`](apps/gemini/README.md) |
 
 ```bash
 ./transmute.sh list                 # apps in the corpus
 ./transmute.sh qwen --download      # same as ./qwen-transmute.sh --download
 ./transmute.sh manus ~/Downloads/ManusAI.Manus_2.1.1.0_neutral_~_vajzd2mq3s8wj.Msixbundle
+./transmute.sh gemini                # fetches Google's package, verifies it, installs
 ./transmute.sh <app> --uninstall    # removes the install, keeps ~/.config/<App>
 ```
 
 ## ⚖️ Legal Disclaimer & Notice of Non-Affiliation
 
-1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen and Manus AI).
+1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen, Manus AI and Google / Gemini).
 2. **Trademarks:** All product names, marks and images belong to their respective owners.
 3. **Zero Redistribution:** The repository contains only original automation scripts, text patches and checksums. Vendor files are obtained by the end user from the vendor's official channels and transformed locally on the user's own machine.
 4. **User Compliance:** Review and comply with each vendor's Terms of Service and license before downloading and running its client.
@@ -33,7 +35,7 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 
 1. `apps/<app>/transmute.sh` - first comment line `# Summary: ...` (shown by `./transmute.sh list`); accept `--dest`, `--bin-dir`, `--uninstall`, `-h`.
 2. `apps/<app>/pins.env` - every upstream input as URL + `*_SHA256`, checked against the publisher's own checksum, with the date.
-3. Use `lib/common.sh` (`verify_sha256`, `fetch_pinned`, `write_launcher`, `write_desktop_entry`) and `lib/msix.py` for MSIX / MSIX bundles.
+3. Use `lib/common.sh` (`verify_sha256`, `fetch_pinned`, `write_launcher`, `write_desktop_entry`), `lib/msix.py` for MSIX / MSIX bundles and `lib/asar.py` to read single files out of an `app.asar`.
 4. Stage the build next to the destination and swap it in at the end; restore the previous install on failure.
 5. Add an offline test under `tests/` (fail-closed pin, uninstall keeps the profile).
 
