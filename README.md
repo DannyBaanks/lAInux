@@ -1,7 +1,29 @@
 # lAInux
 
-> **AI apps, but make them Linux. A corpus of recipes that turn AI desktop apps with no Linux build into native Linux apps, on your own machine.**
-> *Zero proprietary redistribution · every input pinned by SHA-256 (fail closed) · your profile is never touched*
+**AI apps, but make them Linux.** 🐧
+
+Five reproducible recipes to adapt AI desktop applications that lack an official Linux build for the targeted package versions. lAInux works **locally, on your machine**, using vendor-provided inputs and auditable scripts—not repackaged proprietary applications.
+
+*En español: cinco recetas para llevar clientes de IA a Linux sin redistribuir los binarios propietarios de sus fabricantes.*
+
+**The five-app milestone (2026-11-14):** Qwen · Manus · Dola · Gemini desktop · Doubao.
+
+> **What the milestone means:** all five have recipes committed to this corpus. It does **not** mean every feature, account-login path or desktop integration has been validated. [See the evidence-based compatibility matrix](docs/COMPATIBILITY.md).
+
+### Explore the project
+
+- [**Compatibility & evidence**](docs/COMPATIBILITY.md) — feature-level status, known gaps and reproducible gates.
+- [**Architecture**](docs/ARCHITECTURE.md) — what the transmutation pipeline actually does, including WINS/Wine boundaries.
+- [**Contributing a recipe**](docs/CONTRIBUTING.md) — add a sixth app without weakening verification or user safety.
+- [**Qwen reverse-engineering report**](docs/REVERSE_ENGINEERING.md) — the experiment that started the corpus.
+
+### Why lAInux exists
+
+A Windows-only installer does not always imply Windows-only application logic. Some apps mainly need a matching Linux Electron runtime and a platform patch; others require a carefully reconstructed native host or companion bridges. **Each app gets its own recipe** instead of pretending that one transformation works for everything.
+
+**Ground rules:** no vendor-owned binaries in Git; pin and verify upstream inputs; fail closed on unexpected changes; stage installs with rollback; preserve the user's profile. A Linux-native window is not necessarily sandboxed or fully feature-compatible.
+
+## The five recipes
 
 Each app gets a recipe under `apps/<app>/`. A recipe takes the vendor's official
 Windows package, fetches everything else from its official source, verifies each
@@ -17,6 +39,10 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 | **Dola** (intl. Doubao) | `biz.pak` from your Dola install (folder, the `.pak`, or an AppImage that bundles it) | Dola's own UI on Linux Electron 45 + the lAInux host (original code); third-party sign-in in your default browser | [`apps/dola`](apps/dola/README.md) |
 | **Doubao 豆包** | Doubao's package from its CDN (we fetch it, pinned to the MD5 its update API publishes + our SHA-256) | Doubao's own UI on Linux Electron 45 + the same lAInux host as Dola (brand `doubao`) | [`apps/doubao`](apps/doubao/transmute.sh) |
 | **Gemini desktop** | Google's package from `dl.google.com` (we fetch it, pinned to the hash Google's update server publishes) | Linux Electron 44 + untouched `app.asar`; Google sign-in inside the app | [`apps/gemini`](apps/gemini/README.md) |
+
+The matrix above describes the **adaptation strategy**, not an unconditional full-support claim. For known limitations—including Qwen's sandbox configuration, Manus's hybrid companion path, Dola's desktop popups, Gemini's Windows-only helpers and Doubao's unverified interactive login—read [Compatibility & evidence](docs/COMPATIBILITY.md).
+
+## Quick start
 
 ```bash
 ./transmute.sh list                 # apps in the corpus
