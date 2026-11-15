@@ -229,7 +229,7 @@ log_ok "Installed $DEST"
 if $DO_INTEGRATE; then
     write_launcher "$BIN_DIR/kimi-desktop" "$DEST" kimi "$KIMI_TITLE"
     write_desktop_entry "$DESKTOP_DIR/kimi-desktop.desktop" "$KIMI_TITLE" "Kimi and Kimi Work (native Linux port)" \
-        "$BIN_DIR/kimi-desktop" "$DEST/kimi.png" kimi-desktop "" \
+        "$BIN_DIR/kimi-desktop" "$DEST/kimi.png" com.moonshot.kimichat "" \
         "Utility;Network;ArtificialIntelligence;"
 fi
 
