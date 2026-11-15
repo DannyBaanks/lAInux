@@ -15,6 +15,7 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 | **Qwen Desktop** | NSIS `.exe` from `download.qwen.ai` | Linux Electron 35 + patched `app.asar`, MCP via host `bun`/`uv` | [`apps/qwen`](apps/qwen/transmute.sh) → `qwen-transmute.sh` |
 | **Manus Desktop** | Microsoft Store `.Msixbundle` (you supply it) | Linux Electron 43 + untouched `app.asar`; Windows-only companions re-hosted by [WINS](#wins-dependency) | [`apps/manus`](apps/manus/README.md) |
 | **Dola** (intl. Doubao) | `biz.pak` from your Dola install (folder, the `.pak`, or an AppImage that bundles it) | Dola's own UI on Linux Electron 45 + the lAInux host (original code); third-party sign-in in your default browser | [`apps/dola`](apps/dola/README.md) |
+| **Doubao 豆包** | Doubao's package from its CDN (we fetch it, pinned to the MD5 its update API publishes + our SHA-256) | Doubao's own UI on Linux Electron 45 + the same lAInux host as Dola (brand `doubao`) | [`apps/doubao`](apps/doubao/transmute.sh) |
 | **Gemini desktop** | Google's package from `dl.google.com` (we fetch it, pinned to the hash Google's update server publishes) | Linux Electron 44 + untouched `app.asar`; Google sign-in inside the app | [`apps/gemini`](apps/gemini/README.md) |
 
 ```bash
@@ -23,12 +24,13 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 ./transmute.sh manus ~/Downloads/ManusAI.Manus_2.1.1.0_neutral_~_vajzd2mq3s8wj.Msixbundle
 ./transmute.sh dola ~/Applications/Dola-Wine-1.0.0-x86_64.AppImage   # or your Dola folder / its biz.pak
 ./transmute.sh gemini                # fetches Google's package, verifies it, installs
+./transmute.sh doubao                # fetches Doubao's package, verifies it, installs
 ./transmute.sh <app> --uninstall    # removes the install, keeps ~/.config/<App>
 ```
 
 ## ⚖️ Legal Disclaimer & Notice of Non-Affiliation
 
-1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen, Manus AI, ByteDance / Dola and Google / Gemini).
+1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen, Manus AI, ByteDance / Dola and Doubao and Google / Gemini).
 2. **Trademarks:** All product names, marks and images belong to their respective owners.
 3. **Zero Redistribution:** The repository contains only original automation scripts, text patches and checksums. Vendor files are obtained by the end user from the vendor's official channels and transformed locally on the user's own machine.
 4. **User Compliance:** Review and comply with each vendor's Terms of Service and license before downloading and running its client.

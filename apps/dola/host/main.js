@@ -7,11 +7,34 @@ const { app, BrowserWindow, protocol, net, session, ipcMain, shell, Menu } = req
 const fs = require("fs");
 const path = require("path");
 
-// Extracted biz/ (never shipped): DOLA_UI_DIR, else resources/dola-ui of an install
-// made by apps/dola/transmute.sh.
-const UI = process.env.DOLA_UI_DIR || path.join(process.resourcesPath || "", "dola-ui");
+// One host, two brands of the same ByteDance client (Aha/MOA runtime): Dola (international)
+// and Doubao (China). Everything brand-specific lives here. The brand comes from
+// LAINUX_HOST_BRAND, else resources/brand.json written by the recipe, else "dola".
+const BRANDS = {
+  dola: {
+    id: "dola", title: "Dola", origin: "www.dola.com", cookieDomain: /(^|\.)dola\.com$/,
+    scheme: "dola", uaToken: "SamanthaDola", clientVersion: "2.32.6",
+    brandInfo: { brand: "dola", name: "Dola" }, uiDir: "dola-ui", profile: null,
+  },
+  doubao: {
+    id: "doubao", title: "豆包", origin: "www.doubao.com", cookieDomain: /(^|\.)doubao\.com$/,
+    scheme: "doubao", uaToken: "SamanthaDoubao", clientVersion: "2.36.8",
+    brandInfo: { brand: "doubao", name: "豆包" }, uiDir: "doubao-ui", profile: "doubao-linux-host",
+  },
+};
+function readBrandId() {
+  if (process.env.LAINUX_HOST_BRAND) return process.env.LAINUX_HOST_BRAND;
+  try { return JSON.parse(fs.readFileSync(path.join(process.resourcesPath || "", "brand.json"), "utf8")).brand; } catch { return "dola"; }
+}
+const BRAND = BRANDS[readBrandId()] || BRANDS.dola;
+// Each brand keeps its own profile; Dola keeps the original one (dola-linux-host).
+if (BRAND.profile) { app.setName(BRAND.profile); app.setPath("userData", path.join(app.getPath("appData"), BRAND.profile)); }
+// Extracted biz/ (never shipped): DOLA_UI_DIR, else resources/<brand>-ui of an install
+// made by the recipe (apps/dola or apps/doubao transmute.sh).
+const UI = process.env.DOLA_UI_DIR || path.join(process.resourcesPath || "", BRAND.uiDir);
 const LOG = process.env.DOLA_HOST_LOG || "";           // optional console log file
-const ORIGIN_HOSTS = new Set(["www.dola.com"]);
+const ORIGIN = BRAND.origin;
+const ORIGIN_HOSTS = new Set([ORIGIN]);
 if (!UI || !fs.existsSync(path.join(UI, "route.json"))) {
   console.error("DOLA_UI_DIR must point at the extracted biz/ bundle (route.json missing)");
   process.exit(2);
@@ -73,7 +96,7 @@ const winOf = (e) => BrowserWindow.fromWebContents(e.sender);
 const HOST = {
   tea: { getGlobalParams: () => ({}), track: () => true, setBackgroundReady: () => true },
   cloudConfig: { get: () => ({ data: "{}" }), get2: () => ({ data: "{}" }) },
-  builtin: { getBrandInfo: () => ({ brand: "dola", name: "Dola" }) },
+  builtin: { getBrandInfo: () => BRAND.brandInfo },
   network: { getInternetConnectionData: () => ({ online: true, type: "unknown" }) },
   browserSettings: {
     getApplicationLocale: () => app.getLocale(),
@@ -104,7 +127,7 @@ const HOST = {
   tabs: {
     getHomeTabCookie: async ([a]) => {
       const name = a && a.key;
-      const [c] = await session.defaultSession.cookies.get({ url: "https://www.dola.com", name });
+      const [c] = await session.defaultSession.cookies.get({ url: `https://${ORIGIN}`, name });
       return { cookie: c ? c.value : "" };
     },
   },
@@ -131,7 +154,7 @@ ipcMain.on("neotix-channel", (e, name, args, tokens) => {
 const misses = new Map();
 const ctxOf = (w) => contexts.get(w.webContents.id);
 const HOST_WIN = {
-  window: { setTitle: (w, [a]) => { w.setTitle(String(a && a.title || "Dola")); return true; } },
+  window: { setTitle: (w, [a]) => { w.setTitle(String(a && a.title || BRAND.title)); return true; } },
   webPage: { getZoom: (w) => w.webContents.getZoomFactor() },
   // The UI's channel transport asks every view for its own token (getCurrentToken) to
   // address neotixChannel messages; it is the same token as windowContext's handler.
@@ -170,11 +193,11 @@ const HOST_WIN = {
       if (loginWin && !loginWin.isDestroyed()) { loginWin.focus(); return true; }
       // The desktop login view is the bundle's "login" entry (entry-client-login, routed
       // at /login); /client-login-modal does not exist on the public site.
-      const u = new URL((a && a.loginUrl) || "https://www.dola.com/client-login-modal");
-      if (u.hostname === "www.dola.com" && u.pathname.startsWith("/client-login-modal")) u.pathname = "/login";
+      const u = new URL((a && a.loginUrl) || `https://${ORIGIN}/client-login-modal`);
+      if (u.hostname === ORIGIN && u.pathname.startsWith("/client-login-modal")) u.pathname = "/login";
       const url = u.toString();
       log(`LOGIN open ${url} args=${JSON.stringify(a).slice(0, 400)}`);
-      loginWin = newWindow({ width: 460, height: 640, parent: w, modal: true, title: "Dola", autoHideMenuBar: true }, "login_view");
+      loginWin = newWindow({ width: 460, height: 640, parent: w, modal: true, title: BRAND.title, autoHideMenuBar: true }, "login_view");
       loginWin.on("closed", () => {
         loginWin = null;
         // The session lives in shared cookies: reload so the main view picks it up even
@@ -226,9 +249,9 @@ ipcMain.handle("neotix", async (e, ns, method, args) => {
 // dola:// is Dola's scheme for its own desktop views (dola://dola-login/login,
 // dola://dola-audio-recorder, ...): host "dola-<entry>" serves the bundle's <entry>/ app,
 // with root-relative assets (/static/...) from the bundle root.
-protocol.registerSchemesAsPrivileged([{ scheme: "dola", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, allowServiceWorkers: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: BRAND.scheme, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, allowServiceWorkers: true } }]);
 function dolaFile(u) {
-  const entry = u.hostname.replace(/^dola-/, "");
+  const entry = u.hostname.slice(u.hostname.startsWith(`${BRAND.scheme}-`) ? BRAND.scheme.length + 1 : 0);
   const direct = localFile(u.pathname);
   if (direct && !direct.endsWith(path.sep + "index.html")) return direct;     // a real asset
   const idx = path.join(UI, entry, "index.html");
@@ -273,7 +296,7 @@ let mainWin = null, loginWin = null;
 const tabs = new Set();
 // Plain Chrome UA for tabs: identity providers refuse embedded browsers that announce
 // themselves as Electron or as another app.
-const chromeUA = () => session.defaultSession.getUserAgent().replace(/\s(Electron|qwen|dola-linux-host)\/\S+/gi, "");
+const chromeUA = () => session.defaultSession.getUserAgent().replace(/\s(Electron|qwen|[a-z]+-linux-host)\/\S+/gi, "");
 // Tabs run in their own persistent session WITHOUT the https interceptor: identity
 // providers (Google…) need Chromium's own network stack (re-issuing their requests
 // through net.fetch drops Origin/Sec-Fetch headers and upload bodies -> HTTP 400).
@@ -282,9 +305,9 @@ const chromeUA = () => session.defaultSession.getUserAgent().replace(/\s(Electro
 let tabSession = null;
 function tabSes() {
   if (tabSession) return tabSession;
-  tabSession = session.fromPartition("persist:dola-tabs");
+  tabSession = session.fromPartition(`persist:${BRAND.id}-tabs`);
   tabSession.cookies.on("changed", async (_e, c, _cause, removed) => {
-    if (removed || !/(^|\.)dola\.com$/.test(c.domain.replace(/^\./, ""))) return;
+    if (removed || !BRAND.cookieDomain.test(c.domain.replace(/^\./, ""))) return;
     const host = c.domain.replace(/^\./, "");
     try {
       await session.defaultSession.cookies.set({
@@ -341,7 +364,7 @@ function findLoginBrowser() {
   return null;
 }
 const SESSION_COOKIES = new Set(["sessionid", "sessionid_ss", "sid_tt", "sid_guard"]);
-const isDolaHost = h => /(^|\.)dola\.com$/.test(String(h).replace(/^\./, ""));
+const isDolaHost = h => BRAND.cookieDomain.test(String(h).replace(/^\./, ""));
 // Chromium on Linux with --password-store=basic: "v10" + AES-128-CBC, key PBKDF2-SHA1
 // ("peanuts", "saltysalt", 1 iteration), IV of 16 spaces. From cookie DB version 24 on, the
 // plaintext starts with SHA-256(host_key).
@@ -402,7 +425,7 @@ function systemLogin(_idpUrl) {
   // cookies, which a fresh profile does not have. The website runs its own complete flow.
   // A second click just opens another window in the running instance of that profile.
   const proc = require("child_process").spawn(bin, [`--user-data-dir=${prof}`, "--password-store=basic", "--no-first-run",
-    "--no-default-browser-check", "--new-window", "https://www.dola.com/"], { stdio: "ignore" });
+    "--no-default-browser-check", "--new-window", `https://${ORIGIN}/`], { stdio: "ignore" });
   proc.on("error", e => log(`LOGIN browser spawn failed: ${e && e.message}`));
   log(`LOGIN browser ${bin} launcher pid=${proc.pid} profile=${prof}`);
   if (loginPoll) return true;   // already watching this profile
@@ -424,19 +447,19 @@ function systemLogin(_idpUrl) {
             sameSite: c.sameSite, expirationDate: c.expires > 0 ? c.expires : undefined });
         } catch (e) { log(`COOKIE copy failed ${c.name}: ${e && e.message}`); }
       }
-      log(`LOGIN session received from the browser (${got.length} dola.com cookies)`);
+      log(`LOGIN session received from the browser (${got.length} ${ORIGIN} cookies)`);
       const pid = profileBrowserPid(prof);   // the login profile's own browser, nothing else
       if (pid) { try { process.kill(pid, "SIGTERM"); } catch {} }
       if (loginWin && !loginWin.isDestroyed()) loginWin.close();   // closing reloads the main view
       else if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.reload();
       return;
     }
-    log("LOGIN stopped watching: browser closed or timed out without a dola.com session");
+    log("LOGIN stopped watching: browser closed or timed out without a ${ORIGIN} session");
   })().catch(e => log(`LOGIN browser error: ${e && e.message}`)).finally(() => { loginPoll = null; });
   return true;
 }
 function openTab(url) {
-  const t = newWindow({ width: 1000, height: 760, title: "Dola", autoHideMenuBar: true }, "tab", tabSes());
+  const t = newWindow({ width: 1000, height: 760, title: BRAND.title, autoHideMenuBar: true }, "tab", tabSes());
   chromeIdentity(t.webContents);
   t.webContents.on("did-navigate", (_e, u) => log(`TAB nav ${u.slice(0, 120)}`));
   tabs.add(t);
@@ -469,14 +492,14 @@ app.on("second-instance", () => {
 // generic web client (no mode-select menu in action_bar_v3/brief_list, so the composer
 // of every conversation stays on its empty fallback). Version: the Windows client the
 // update API offers (www.dola.com/samantha/desktop/get_latest_version, 2026-11-14).
-const DOLA_CLIENT_VERSION = process.env.DOLA_CLIENT_VERSION || "2.32.6";
+const DOLA_CLIENT_VERSION = process.env.LAINUX_CLIENT_VERSION || process.env.DOLA_CLIENT_VERSION || BRAND.clientVersion;
 
 app.whenReady().then(() => {
-  app.userAgentFallback = `${chromeUA()} SamanthaDola/${DOLA_CLIENT_VERSION}`;
+  app.userAgentFallback = `${chromeUA()} ${BRAND.uaToken}/${DOLA_CLIENT_VERSION}`;
   session.defaultSession.setUserAgent(app.userAgentFallback);
   log(`UA ${app.userAgentFallback}`);
   Menu.setApplicationMenu(null); // Dola has no File/Edit/View menu; editing shortcuts still work
-  session.defaultSession.protocol.handle("dola", async (req) => {
+  session.defaultSession.protocol.handle(BRAND.scheme, async (req) => {
     const u = new URL(req.url);
     const f = dolaFile(u);
     log(`DOLA ${u.hostname}${u.pathname} -> ${f ? path.relative(UI, f) : "404"}`);
@@ -508,9 +531,9 @@ app.whenReady().then(() => {
   // Dola's hidden background page (dola://dola-background): serves "AgentBackground"
   // RPCs (rfc-request) for the visible windows, as the Windows host keeps it running.
   const bg = newWindow({ width: 800, height: 600, show: false }, "background");
-  bg.loadURL("dola://dola-background/");
-  const win = mainWin = newWindow({ width: 1280, height: 800, title: "Dola" }, "chat_view");
-  win.loadURL("https://www.dola.com/chat/");
+  bg.loadURL(`${BRAND.scheme}://${BRAND.scheme}-background/`);
+  const win = mainWin = newWindow({ width: 1280, height: 800, title: BRAND.title }, "chat_view");
+  win.loadURL(`https://${ORIGIN}/chat/`);
   if (process.env.DOLA_HOST_SHOT) {
     setTimeout(async () => {
       fs.writeFileSync(process.env.DOLA_HOST_SHOT, (await win.webContents.capturePage()).toPNG());
