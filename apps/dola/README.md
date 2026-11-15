@@ -35,7 +35,17 @@ Login (2026-11-13): "Iniciar sesión" → the UI asks the hidden background page
 desktop view behind `/client-login-modal`) in a modal window: Google / Facebook / phone /
 Apple / QR. `tabs.getHomeTabCookie` reads the real session cookies (passport CSRF). When
 the login window closes the main view reloads (the session lives in shared cookies).
-Verified up to the login screen; an actual sign-in needs the user's account.
+Third-party sign-in (2026-11-14, verified with a real Google account): Google refuses both
+embedded browsers and real browsers started with `--remote-debugging-port` ("this browser
+or app may not be secure"). So a click on Google/Apple/Facebook/… opens the user's
+**default browser** (xdg; Chromium family, `DOLA_LOGIN_BROWSER` overrides) as a plain
+browser — no debugging port, nothing automated — on `www.dola.com`, in its own profile
+(`<userData>/login-browser-<browser>`, `--password-store=basic`). The user signs in on the
+website; the desktop UI *is* www.dola.com, so its session is the app's session. The host
+reads that profile's cookie DB (a copy; Chromium flushes it about every 30 s, and on
+close), decrypts it (v10, basic key), copies the dola.com cookies into the app session,
+closes that browser (main pid from the profile's `SingletonLock`, checked against its
+command line) and reloads.
 
 Not yet: `chrome://` views
 (audio recorder, ai-views popups), entry-moa/entry-main JS apps, packaging as a recipe

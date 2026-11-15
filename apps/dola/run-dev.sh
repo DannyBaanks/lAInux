@@ -8,7 +8,7 @@ set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RT="${LAINUX_ELECTRON_DIR:-$HOME/.local/share/qwen-desktop}"
 CACHE="$HOME/.cache/lainux"
-DEV="$CACHE/dola-dev-runtime"
+DEV="$CACHE/dola-dev-runtime-$(basename "$RT")"   # one per runtime: never mix two Electrons
 export DOLA_UI_DIR="${DOLA_UI_DIR:-$CACHE/dola-ui}"
 if [ ! -f "$DOLA_UI_DIR/route.json" ]; then
     echo "Extract the UI first:  python3 lib/pak.py --extract-tree $DOLA_UI_DIR <Dola>/local_webcontents/biz/biz.pak" >&2

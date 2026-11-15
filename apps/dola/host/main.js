@@ -122,7 +122,10 @@ const HOST_WIN = {
     // { url, command: "newTab" | "closeTab", forceRunInClient }
     sendCommand: (w, [a]) => {
       const cmd = a && a.command;
-      if (cmd === "newTab" && a.url) { openTab(a.url); return true; }
+      if (cmd === "newTab" && a.url) {
+        if (isIdentityProvider(a.url) && systemLogin(a.url)) return true;
+        openTab(a.url); return true;
+      }
       if (cmd === "closeTab") {
         const target = [...tabs].find(t => t.webContents === w.webContents) ||
           [...tabs].find(t => a.url && t.webContents.getURL().split("#")[0] === String(a.url).split("#")[0]);
@@ -234,6 +237,8 @@ function newWindow(opts, name, ses) {
   // window.open (e.g. the OAuth popups of the login view): log it, then let it open.
   win.webContents.setWindowOpenHandler(({ url, features }) => {
     log(`WINOPEN[${name}] ${url.slice(0, 200)} features=${features}`);
+    // Identity providers refuse embedded browsers: same route as pinWindow newTab.
+    if (isIdentityProvider(url) && systemLogin(url)) return { action: "deny" };
     return { action: "allow" };
   });
   win.webContents.on("did-create-window", (child) => {
@@ -273,9 +278,147 @@ function tabSes() {
   });
   return tabSession;
 }
+// Identity providers check the UA string AND Client Hints (Sec-CH-UA headers and
+// navigator.userAgentData), whose brands in Electron do not include "Google Chrome".
+// Present one coherent Chrome identity (same engine major version) via the emulator.
+function chromeIdentity(wc) {
+  const major = process.versions.chrome.split(".")[0];
+  const ua = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+  const brands = [{ brand: "Google Chrome", version: major }, { brand: "Chromium", version: major }, { brand: "Not_A Brand", version: "24" }];
+  try {
+    wc.debugger.attach("1.3");
+    wc.debugger.sendCommand("Emulation.setUserAgentOverride", {
+      userAgent: ua, acceptLanguage: app.getLocale(), platform: "Linux x86_64",
+      userAgentMetadata: { brands, fullVersionList: brands.map(b => ({ ...b, version: b.brand === "Not_A Brand" ? "24.0.0.0" : process.versions.chrome })),
+        fullVersion: process.versions.chrome, platform: "Linux", platformVersion: "6.8.0", architecture: "x86", model: "", mobile: false, bitness: "64", wow64: false },
+    });
+  } catch (e) { log(`TAB identity failed: ${e && e.message}`); wc.setUserAgent(ua); }
+}
+// Google (and other identity providers) refuse sign-in inside embedded browsers, and also
+// in a real browser started with --remote-debugging-port ("this browser or app may not be
+// secure"). So sign-in happens in the user's DEFAULT browser (Chromium family), run as a
+// plain browser: no debugging port, no automation flags, nothing injected. It gets its own
+// profile with --password-store=basic, which lets the host read that profile's own cookie
+// file. Dola's desktop UI IS www.dola.com, so the web session cookie is the app's session:
+// the user signs in on www.dola.com, the host copies the dola.com cookies into the app.
+const IDP = /(^|\.)(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|facebook\.com|tiktok\.com)$/;
+function isIdentityProvider(u) { try { return IDP.test(new URL(u).hostname); } catch { return false; } }
+const CHROMIUM_FAMILY = ["brave-browser", "brave", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "vivaldi", "opera"];
+function onPath(b) {
+  for (const d of (process.env.PATH || "").split(":")) { const f = path.join(d, b); try { fs.accessSync(f, fs.constants.X_OK); return f; } catch {} }
+  return null;
+}
+function findLoginBrowser() {
+  if (process.env.DOLA_LOGIN_BROWSER) return process.env.DOLA_LOGIN_BROWSER;
+  // The user's default browser first (xdg), when it is Chromium-based (same cookie format).
+  try {
+    const desk = require("child_process").execFileSync("xdg-settings", ["get", "default-web-browser"], { encoding: "utf8", timeout: 3000 }).trim();
+    const base = desk.replace(/\.desktop$/, "");
+    const hit = CHROMIUM_FAMILY.find(b => base === b || base.startsWith(b)) && onPath(base);
+    if (hit) return hit;
+    log(`LOGIN default browser ${desk} is not Chromium-based (or not on PATH); using another one`);
+  } catch (e) { log(`LOGIN xdg-settings failed: ${e && e.message}`); }
+  for (const b of CHROMIUM_FAMILY) { const f = onPath(b); if (f) return f; }
+  return null;
+}
+const SESSION_COOKIES = new Set(["sessionid", "sessionid_ss", "sid_tt", "sid_guard"]);
+const isDolaHost = h => /(^|\.)dola\.com$/.test(String(h).replace(/^\./, ""));
+// Chromium on Linux with --password-store=basic: "v10" + AES-128-CBC, key PBKDF2-SHA1
+// ("peanuts", "saltysalt", 1 iteration), IV of 16 spaces. From cookie DB version 24 on, the
+// plaintext starts with SHA-256(host_key).
+const BASIC_KEY = crypto.pbkdf2Sync("peanuts", "saltysalt", 1, 16, "sha1");
+function decryptCookie(enc, hostKey, dbVersion) {
+  const b = Buffer.from(enc);
+  if (b.length < 3 || b.subarray(0, 3).toString() !== "v10") return null;
+  const d = crypto.createDecipheriv("aes-128-cbc", BASIC_KEY, Buffer.alloc(16, " "));
+  let out = Buffer.concat([d.update(b.subarray(3)), d.final()]);
+  if (dbVersion >= 24 && out.length >= 32 &&
+      out.subarray(0, 32).equals(crypto.createHash("sha256").update(hostKey).digest())) out = out.subarray(32);
+  return out.toString("utf8");
+}
+// Chromium keeps the DB open and flushes about every 30 s: read a copy.
+function readDolaCookies(prof) {
+  const src = path.join(prof, "Default", "Cookies");
+  if (!fs.existsSync(src)) return [];
+  const tmp = path.join(prof, "..", "login-cookies-copy");
+  fs.copyFileSync(src, tmp);
+  try { fs.copyFileSync(src + "-journal", tmp + "-journal"); } catch { try { fs.unlinkSync(tmp + "-journal"); } catch {} }
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(tmp, { readOnly: true });
+  try {
+    let ver = 0;
+    try { ver = Number(db.prepare("SELECT value FROM meta WHERE key='version'").get().value) || 0; } catch {}
+    // Chromium time is microseconds since 1601-01-01, beyond a JS number: convert in SQL.
+    const rows = db.prepare("SELECT host_key, name, value, encrypted_value, path, " +
+      "CASE WHEN expires_utc > 0 THEN expires_utc / 1000000 - 11644473600 ELSE 0 END AS expires, " +
+      "is_secure, is_httponly, samesite FROM cookies").all();
+    return rows.filter(r => isDolaHost(r.host_key)).map(r => ({
+      domain: r.host_key, name: r.name, path: r.path || "/", secure: !!r.is_secure, httpOnly: !!r.is_httponly,
+      value: r.value || decryptCookie(r.encrypted_value, r.host_key, ver) || "",
+      expires: Number(r.expires) || 0,
+      sameSite: { 0: "no_restriction", 1: "lax", 2: "strict" }[r.samesite] || "unspecified",
+    }));
+  } finally { db.close(); }
+}
+// The browser's real main process, from the profile's SingletonLock ("<host>-<pid>"). The
+// launcher (brave-browser, google-chrome) is a wrapper that exits at once, so its own
+// pid/exit says nothing. The pid is only trusted if its command line names this profile.
+function profileBrowserPid(prof) {
+  try {
+    const pid = Number(fs.readlinkSync(path.join(prof, "SingletonLock")).split("-").pop());
+    const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    // Chromium may rewrite its argv as one space-separated string (process title).
+    const flag = `--user-data-dir=${prof}`;
+    return [flag + "\0", flag + " "].some(f => cmd.includes(f)) || cmd.endsWith(flag) ? pid : null;
+  } catch { return null; }
+}
+let loginPoll = null;
+const LOGIN_WAIT_MS = 15 * 60 * 1000;
+function systemLogin(_idpUrl) {
+  const bin = findLoginBrowser();
+  if (!bin) { log("LOGIN no Chromium-family browser found, falling back to an embedded tab"); return false; }
+  const prof = path.join(app.getPath("userData"), "login-browser-" + path.basename(bin));
+  fs.mkdirSync(prof, { recursive: true });
+  // www.dola.com itself, not the IdP URL: that URL carries an OAuth state bound to the app's
+  // cookies, which a fresh profile does not have. The website runs its own complete flow.
+  // A second click just opens another window in the running instance of that profile.
+  const proc = require("child_process").spawn(bin, [`--user-data-dir=${prof}`, "--password-store=basic", "--no-first-run",
+    "--no-default-browser-check", "--new-window", "https://www.dola.com/"], { stdio: "ignore" });
+  proc.on("error", e => log(`LOGIN browser spawn failed: ${e && e.message}`));
+  log(`LOGIN browser ${bin} launcher pid=${proc.pid} profile=${prof}`);
+  if (loginPoll) return true;   // already watching this profile
+  const started = Date.now();
+  loginPoll = (async () => {
+    let seenRunning = false, missing = 0;
+    while (Date.now() - started < LOGIN_WAIT_MS) {
+      await new Promise(r => setTimeout(r, 2000));
+      // Closed by the user: closing flushes the cookie DB, so read a few more times, then stop.
+      if (profileBrowserPid(prof)) seenRunning = true;
+      else if (seenRunning && ++missing > 3) break;
+      let got;
+      try { got = readDolaCookies(prof); } catch (e) { log(`LOGIN cookie read failed: ${e && e.message}`); continue; }
+      if (!got.some(c => SESSION_COOKIES.has(c.name) && c.value)) continue;
+      for (const c of got) {
+        try {
+          await session.defaultSession.cookies.set({ url: `https://${c.domain.replace(/^\./, "")}${c.path}`, name: c.name, value: c.value,
+            domain: c.domain.startsWith(".") ? c.domain : undefined, path: c.path, secure: c.secure, httpOnly: c.httpOnly,
+            sameSite: c.sameSite, expirationDate: c.expires > 0 ? c.expires : undefined });
+        } catch (e) { log(`COOKIE copy failed ${c.name}: ${e && e.message}`); }
+      }
+      log(`LOGIN session received from the browser (${got.length} dola.com cookies)`);
+      const pid = profileBrowserPid(prof);   // the login profile's own browser, nothing else
+      if (pid) { try { process.kill(pid, "SIGTERM"); } catch {} }
+      if (loginWin && !loginWin.isDestroyed()) loginWin.close();   // closing reloads the main view
+      else if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.reload();
+      return;
+    }
+    log("LOGIN stopped watching: browser closed or timed out without a dola.com session");
+  })().catch(e => log(`LOGIN browser error: ${e && e.message}`)).finally(() => { loginPoll = null; });
+  return true;
+}
 function openTab(url) {
   const t = newWindow({ width: 1000, height: 760, title: "Dola", autoHideMenuBar: true }, "tab", tabSes());
-  t.webContents.setUserAgent(chromeUA());
+  chromeIdentity(t.webContents);
   t.webContents.on("did-navigate", (_e, u) => log(`TAB nav ${u.slice(0, 120)}`));
   tabs.add(t);
   t.on("closed", () => tabs.delete(t));
