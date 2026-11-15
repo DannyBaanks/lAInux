@@ -1,6 +1,6 @@
 # Compatibility and evidence
 
-**Snapshot:** 2026-11-14 · **five recipes in the repository** · **not five claims of complete feature parity**.
+**Snapshot:** 2026-11-14 · **six recipes in the repository** · **not six claims of complete feature parity**.
 
 This is a public status ledger for the recipes in `apps/`. A committed recipe, an offline test, a rendered desktop window and a full interactive workflow answer **different questions**. Do not collapse them into one "works 100%" number.
 
@@ -13,6 +13,7 @@ This is a public status ledger for the recipes in `apps/`. A committed recipe, a
 | **Dola** | Vendor `biz.pak` UI on original lAInux Electron host | UI and network messages are documented; third-party browser login recorded with a real account in the app guide | Some native popup/`chrome://` views and associated controls are not yet implemented; chat input must be retested on affected setups | [Dola guide](../apps/dola/README.md), [recipe](../apps/dola/transmute.sh) |
 | **Gemini desktop** | Original `app.asar` on matching Linux Electron 44; Windows native addon falls back | App startup, Google sign-in and chat are documented as verified on 2026-11-14 | Windows-only helper features (Alt+Space, selection/foreground context), Crashpad and automatic updates | [Gemini guide](../apps/gemini/README.md), [recipe](../apps/gemini/transmute.sh) |
 | **Doubao 豆包** | Pinned official package; vendor `biz.pak` UI on shared Dola/lAInux host | Extraction, version/hash ledger and install recipe are in the repository; offline recipe test exists | **Interactive authentication and end-to-end chat are not established by the published evidence**; Chinese phone/Douyin login may be necessary | [recipe](../apps/doubao/transmute.sh), [pins](../apps/doubao/pins.env), [offline test](../tests/test_doubao_recipe.sh) |
+| **Kimi + Kimi Work** | Original `app.asar` on matching Linux Electron 43; Kimi Work's daimon (JavaScript) assembled with Linux CPython 3.12, uv and jieba, run by Kimi's Electron as Node | On 2026-11-14 the owner signed in with Google (the app opens the default browser and receives the callback on 127.0.0.1), chatted in Chat, and Kimi Work's daimon reached `ready` with the Work home rendered | Kimi Claw (`gateway.asar`: Windows-only sharp/node-pty/canvas/sqlite-vec/koffi builds) and the Windows helpers `kimi-webbridge`, `kimi-slides`, `kimiim-cli`; the 8 `kimi-*.node` desktop addons (screen capture, OCR, global input…) are Windows builds; a Work task end to end is not yet recorded | [Kimi guide](../apps/kimi/README.md), [recipe](../apps/kimi/transmute.sh), [offline test](../tests/test_kimi_recipe.sh) |
 
 ### Status interpretation
 
@@ -39,6 +40,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 ./tests/test_dola_recipe.sh
 ./tests/test_doubao_recipe.sh
 ./tests/test_gemini_recipe.sh
+./tests/test_kimi_recipe.sh
 ./tests/test_manus_recipe.sh
 # Qwen: networked end-to-end pipeline (downloads upstream assets)
 ./test_e2e.sh
