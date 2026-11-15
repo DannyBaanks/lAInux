@@ -63,6 +63,12 @@ const ENV = {
   channel: "lainux", platform: "linux", appVersion: "1.0.6.7189",
 };
 ipcMain.on("neotix-env", (e) => { e.returnValue = ENV; });
+// Uncaught errors of the UI with their stacks (the console only carries the message).
+ipcMain.on("host-diag", (e, kind, text) => {
+  if (!LOG) return;
+  const who = (contexts.get(e.sender.id) || {}).name || "?";
+  log(`DIAG[${who}] ${kind} ${String(text).slice(0, 2000)}`);
+});
 const winOf = (e) => BrowserWindow.fromWebContents(e.sender);
 const HOST = {
   tea: { getGlobalParams: () => ({}), track: () => true, setBackgroundReady: () => true },
@@ -83,7 +89,14 @@ const HOST = {
   },
   globalASR: { isChatASREnabled: () => false },
   sandbox: { isSupport: () => false, isSupportNoSandbox: () => false },
-  appshare: { setShareInfos: () => true, getAppsList: () => [] },
+  // Shapes the chat view reads ({applist}, {proxyList}, {servers}); a bare [] made its
+  // setup effect throw before it wired the composer (the input stayed blank).
+  appshare: {
+    setShareInfos: () => true,
+    getAppsList: () => ({ applist: [] }),
+    getProxyList: () => ({ proxyList: [] }),
+    getAppProxyServerStatus: () => ({ servers: [] }),
+  },
   device: { getDeviceInfo: () => ({ deviceId: store.device.deviceId, installId: store.device.installId, platform: "linux" }) },
   startupMetric: { getNativeStartupCostMS: () => 0, setWebviewStartupEvent: () => true },
   audioRecorder: { setLibraExpEnabled: () => true },
@@ -120,6 +133,10 @@ const ctxOf = (w) => contexts.get(w.webContents.id);
 const HOST_WIN = {
   window: { setTitle: (w, [a]) => { w.setTitle(String(a && a.title || "Dola")); return true; } },
   webPage: { getZoom: (w) => w.webContents.getZoomFactor() },
+  // The UI's channel transport asks every view for its own token (getCurrentToken) to
+  // address neotixChannel messages; it is the same token as windowContext's handler.
+  // Missing, the transport stays uninitialised and the composer renders blank.
+  popupView: { getWebContentsToken: (w) => ctxOf(w)?.token },
   pinWindow: {
     // { url, command: "newTab" | "closeTab", forceRunInClient }
     sendCommand: (w, [a]) => {
@@ -432,7 +449,32 @@ function openTab(url) {
   return t;
 }
 
+// One instance per profile. Two Electron processes on the same userData fight over its
+// IndexedDB/LocalStorage locks and the UI breaks (seen 2026-11-14: after the first
+// message the composer went blank). A second launch (menu, launcher) brings the running
+// window forward instead.
+if (!app.requestSingleInstanceLock()) {
+  log("SINGLE-INSTANCE another Dola is running on this profile; handing over");
+  app.exit(0);
+}
+app.on("second-instance", () => {
+  const w = mainWin;
+  if (!w || w.isDestroyed()) return;
+  if (w.isMinimized()) w.restore();
+  w.show(); w.focus();
+});
+
+// The UI recognises the desktop client by its User-Agent token "SamanthaDola/<version>":
+// that is where pc_version comes from, and without it the server answers as to a
+// generic web client (no mode-select menu in action_bar_v3/brief_list, so the composer
+// of every conversation stays on its empty fallback). Version: the Windows client the
+// update API offers (www.dola.com/samantha/desktop/get_latest_version, 2026-11-14).
+const DOLA_CLIENT_VERSION = process.env.DOLA_CLIENT_VERSION || "2.32.6";
+
 app.whenReady().then(() => {
+  app.userAgentFallback = `${chromeUA()} SamanthaDola/${DOLA_CLIENT_VERSION}`;
+  session.defaultSession.setUserAgent(app.userAgentFallback);
+  log(`UA ${app.userAgentFallback}`);
   Menu.setApplicationMenu(null); // Dola has no File/Edit/View menu; editing shortcuts still work
   session.defaultSession.protocol.handle("dola", async (req) => {
     const u = new URL(req.url);
