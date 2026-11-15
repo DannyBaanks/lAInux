@@ -103,9 +103,10 @@ Icon=$icon
 Terminal=false
 Type=Application
 Categories=$cats
-MimeType=x-scheme-handler/$scheme;
 StartupWMClass=$wmclass
 EOF
+    # Only apps that register a URL scheme claim its handler.
+    if [[ -n "$scheme" ]]; then echo "MimeType=x-scheme-handler/$scheme;" >> "$path"; fi
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$(dirname "$path")" 2>/dev/null || true
     fi

@@ -7,7 +7,9 @@ const { app, BrowserWindow, protocol, net, session, ipcMain, shell, Menu } = req
 const fs = require("fs");
 const path = require("path");
 
-const UI = process.env.DOLA_UI_DIR;                    // extracted biz/ (never shipped)
+// Extracted biz/ (never shipped): DOLA_UI_DIR, else resources/dola-ui of an install
+// made by apps/dola/transmute.sh.
+const UI = process.env.DOLA_UI_DIR || path.join(process.resourcesPath || "", "dola-ui");
 const LOG = process.env.DOLA_HOST_LOG || "";           // optional console log file
 const ORIGIN_HOSTS = new Set(["www.dola.com"]);
 if (!UI || !fs.existsSync(path.join(UI, "route.json"))) {

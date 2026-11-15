@@ -21,12 +21,21 @@ Status (2026-11-13, measured in a hidden Xvfb window):
   are in `HOST`/`HOST_WIN`; any other answers `No such method!` (the UI's own
   "not supported" path) and is logged as `NEOTIX-MISS` with DOLA_HOST_LOG set.
 
-Run it (needs an Electron runtime and the UI extracted from your own install):
+Install it (recipe, 2026-11-14):
 
 ```bash
-python3 lib/pak.py --extract-tree /tmp/dola-ui  <Dola>/local_webcontents/biz/biz.pak
-DOLA_UI_DIR=/tmp/dola-ui  electron apps/dola/host          # DOLA_HOST_LOG=file to trace
+./transmute.sh dola <Dola install folder | biz.pak | Dola AppImage>
+dola                                   # launcher; DOLA_HOST_LOG=file to trace
+./transmute.sh dola --uninstall        # keeps ~/.config/dola-linux-host (your session)
 ```
+
+The recipe verifies `biz.pak` against `pins.env` (Dola's online installer resolves the
+client at runtime, so there is no fixed vendor URL to pin), installs the official Linux
+Electron 45.2.3, copies `host/` to `resources/app` and extracts the UI to
+`resources/dola-ui`, where the host finds it when `DOLA_UI_DIR` is unset. An AppImage is
+only read with `unsquashfs`, never executed.
+
+For development on the checkout instead: `DOLA_UI_DIR=<extracted biz/> apps/dola/run-dev.sh`.
 
 Login (2026-11-13): "Iniciar sesión" → the UI asks the hidden background page
 (`dola://dola-background`, served from the bundle) over neotixChannel RPC
@@ -48,5 +57,4 @@ closes that browser (main pid from the profile's `SingletonLock`, checked agains
 command line) and reloads.
 
 Not yet: `chrome://` views
-(audio recorder, ai-views popups), entry-moa/entry-main JS apps, packaging as a recipe
-(`transmute.sh dola`) with a pinned official Electron.
+(audio recorder, ai-views popups), entry-moa/entry-main JS apps.
