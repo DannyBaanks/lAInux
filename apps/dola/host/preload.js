@@ -17,6 +17,14 @@ async function invoke(ns, method, args) {
   return r ? r.value : undefined;
 }
 
+// Uncaught errors go to the host log with their stack (DOLA_HOST_LOG); the console
+// message alone does not say where a failure comes from.
+const diag = (kind, err) => {
+  try { ipcRenderer.send("host-diag", kind, String((err && err.stack) || err)); } catch {}
+};
+window.addEventListener("unhandledrejection", (e) => diag("unhandledrejection", e.reason));
+window.addEventListener("error", (e) => diag("error", e.error || e.message));
+
 // ---- access points: callback-style call/subscribe, answered by the main process
 const subscriptions = new Map(); // event -> Set(handler)
 ipcRenderer.on("towel-push", (_e, event, payload) => {
@@ -24,7 +32,11 @@ ipcRenderer.on("towel-push", (_e, event, payload) => {
 });
 function createAp() {
   return {
-    call(method, payload, cb) {
+    // Variadic, callback last: call(name, cb), call(name, payload, cb), and the UI's
+    // worker transport uses call(name, peerId, cb) / call(name, peerId, method, params, cb).
+    call(method, ...rest) {
+      const cb = typeof rest[rest.length - 1] === "function" ? rest.pop() : null;
+      const payload = rest.length <= 1 ? rest[0] : rest;
       ipcRenderer.invoke("towel", method, JSON.parse(JSON.stringify(payload ?? null)))
         .then(([ok, res]) => cb && cb(ok, res), (e) => cb && cb(false, String(e)));
     },
