@@ -432,6 +432,21 @@ function openTab(url) {
   return t;
 }
 
+// One instance per profile. Two Electron processes on the same userData fight over its
+// IndexedDB/LocalStorage locks and the UI breaks (seen 2026-11-14: after the first
+// message the composer went blank). A second launch (menu, launcher) brings the running
+// window forward instead.
+if (!app.requestSingleInstanceLock()) {
+  log("SINGLE-INSTANCE another Dola is running on this profile; handing over");
+  app.exit(0);
+}
+app.on("second-instance", () => {
+  const w = mainWin;
+  if (!w || w.isDestroyed()) return;
+  if (w.isMinimized()) w.restore();
+  w.show(); w.focus();
+});
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null); // Dola has no File/Edit/View menu; editing shortcuts still work
   session.defaultSession.protocol.handle("dola", async (req) => {
