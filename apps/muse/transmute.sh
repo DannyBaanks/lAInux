@@ -179,6 +179,8 @@ WRAP
 
     write_launcher "$BIN_DIR/muse-desktop" "$DEST" "muse" "$MUSE_TITLE"
 
+    # StartupWMClass must equal the X11 WM_CLASS Electron actually sets ("muse",
+    # derived from productName), or the dock shows a generic icon for the window.
     cat > "$DESKTOP_DIR/muse-desktop.desktop" <<EOF
 [Desktop Entry]
 Name=Muse
@@ -188,7 +190,7 @@ Icon=$DEST/muse.png
 Terminal=false
 Type=Application
 Categories=Utility;
-StartupWMClass=muse-desktop
+StartupWMClass=muse
 EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
     log_ok "desktop entry: $DESKTOP_DIR/muse-desktop.desktop"
