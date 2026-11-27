@@ -1,37 +1,68 @@
-# Muse (Meta) — native Linux protocol client
+# Muse (Meta) — native Linux client & computer node
 
-**App**: Muse, Meta's assistant (bundle `com.meta.endo`; internal codenames in
-flight: Endo / Hatch / Proton / ecto1 / Tigon). The desktop artefact is a
-macOS-NATIVE SwiftUI + Rust binary — **NOT Electron** — so the classic lAInux
-asar-swap recipe does not apply (79 dylibs, Metal, SwiftUI: no `app.asar`).
+**App:** Muse, Meta's AI assistant (bundle `com.meta.endo`; internal codenames: Endo / Hatch / Proton / ecto1 / Tigon). Unlike the other apps in this corpus, Meta ships Muse as a **macOS-native SwiftUI + Rust binary** — **not Electron** (79 dylibs, Metal, SwiftUI, zero `app.asar`). The classic asar-swap recipe does not apply.
 
-**Route** (decided 2026-11-27, after isolating-installer inspection): build a
-**native Linux protocol client** that logs in via the same `auth.meta.com`
-OIDC dance and talks to the same endpoints as the official web app
-(`https://muse.ai`, 302 from `agent.meta.ai`), whose realtime surface is
-WebSocket (`wss://edge-chat-latest.meta.ai` & co) instead of the desktop
-binary's native MQTT/MSYS. The DMG never becomes the runnable: it stays an RE +
-asset (icon) reference on the user's disk, hash-pinned, fail closed.
+**How it runs on Linux:**
 
-Full evidence pack: `docs/PROTOCOL.md` (endpoints, headers, auth flow,
-attestation risk, repro commands).
+1. **Desktop shell (`muse-desktop`)** — hardened pinned Electron 43.6.0 window running `muse.ai` with an isolated profile (`~/.config/muse-desktop`), native dock icon extracted locally from your pinned `Muse-14.1.dmg` (`StartupWMClass=muse`), and an authenticated local broker that hands VM/chat credentials to the daemon.
+2. **Native Linux computer node (`muse-node`)** — clean-room Node 24 implementation of Muse's CVM device-link protocol (`Noise_XX_25519_AESGCM_SHA256` over WebSocket, streaming RPC, protobuf chunk framing, RV enrollment, heartbeats, and `client.invoke` dispatch). Registers your Linux machine under **Settings → Devices** as `<hostname> (Linux)` and answers live invokes end to end.
+3. **Fail-closed native approval (`zenity`)** — mutating commands (`files.write`, `files.mkdir`, `shell.exec`) open a native `zenity` confirmation dialog with a bounded preview of the action. The default button is **Rechazar** (an accidental Enter denies); timeout (110 s), dialog close, or missing display all deny (`permission_denied`).
+4. **`systemd --user` service** — `apps/muse/daemon/install-service.sh` installs `muse-node.service` bound to `graphical-session.target`, retrying until `muse-desktop` is open.
 
-| Phase | State |
+The DMG never becomes the runnable: it stays a hash-pinned RE and icon reference on your own disk, never redistributed.
+
+Full protocol & evidence pack: [`docs/PROTOCOL.md`](docs/PROTOCOL.md) · [`docs/evidence/2026-11-27-linux-node-invoke-acceptance.log`](docs/evidence/2026-11-27-linux-node-invoke-acceptance.log).
+
+## Status
+
+| Component | State |
 |---|---|
-| `verify` (DMG pin) | DONE — Muse-14.1 sha256 pinned in `pins.env` |
-| `inspect` (RE extraction) | DONE — findings land in the lAInux cache + `docs/PROTOCOL.md` |
-| `install` (v0 shell) | DONE — muse.ai in a hardened Electron window, isolated profile, icon extracted from the pinned DMG |
-| web-traffic capture (muse.ai logged-in) | NEXT — ground truth for request shapes |
-| v1 protocol-native client | NOT YET — gated on the capture; grows inside the same shell |
-| WINS Mach-O re-host of the real binary | PARKED — DS3-scale (SwiftUI surface); see PROTOCOL.md §8 |
+| `verify` (DMG pin) | **DONE** — `Muse-14.1.dmg` SHA-256 pinned in `pins.env` |
+| `inspect` (RE extraction) | **DONE** — endpoints, headers, dylibs, protocol map in `docs/PROTOCOL.md` |
+| `install` (desktop shell) | **DONE** — pinned Electron 43.6.0, isolated profile, DMG icon + `StartupWMClass=muse` |
+| `muse-node` (Linux computer node) | **DONE** — Noise XX transport, device registration, live `client.invoke` verified end to end |
+| Native approval (`zenity`) | **DONE** — fail-closed, **Rechazar** default, preview, 110 s timeout |
+| `systemd --user` service | **DONE** — `muse-node.service` with `--uninstall` |
+| WINS Mach-O re-host of SwiftUI binary | **PARKED** — unnecessary once the native protocol node works; see `docs/PROTOCOL.md §8` |
+
+## Registered Linux node commands
+
+| Command | Approval | Notes |
+|---|---|---|
+| `ping` | Automatic | Liveness check (`linux`, hostname, timestamp) |
+| `system.which` | Automatic | Resolve executable on `PATH` (executes nothing) |
+| `files.list` | Automatic | Paginated folder listing |
+| `files.search` | Automatic | Recursive name/glob search (skips hidden files) |
+| `files.read` | Automatic | Paginated UTF-8 text + PNG/JPEG/GIF/WebP up to 3 MB |
+| `files.write` | **Zenity prompt** | Create/overwrite UTF-8 file (120 s timeout) |
+| `files.mkdir` | **Zenity prompt** | Create directory (120 s timeout) |
+| `shell.exec` | **Zenity prompt** | Run `/bin/bash -lc` command (240 s timeout) |
 
 ## Usage
 
 ```bash
-./transmute.sh muse install                           # v0 shell + icon (pinned Electron 43.6.0)
-./transmute.sh muse inspect [path/to/Muse-14.1.dmg]   # verify pin + extract + strings + dylibs
-./transmute.sh muse verify [path/to/Muse-14.1.dmg]    # pin check only
+# 1. Install the desktop shell (uses your local Muse-14.1.dmg for the pinned icon)
+./transmute.sh muse install
+
+# 2. Launch Muse and sign in inside the window
+muse-desktop
+
+# 3. Install and start the Linux computer node as a user service (requires Node >= 24 + zenity)
+./apps/muse/daemon/install-service.sh
+journalctl --user -u muse-node -f
+
+# Uninstall the service
+./apps/muse/daemon/install-service.sh --uninstall
+
+# Other recipe subcommands
+./transmute.sh muse verify  [path/to/Muse-14.1.dmg]   # SHA-256 pin check only
+./transmute.sh muse inspect [path/to/Muse-14.1.dmg]   # verify + extract + RE summary
 ```
 
-Profile (isolated): `${XDG_CONFIG_HOME:-~/.config}/muse-desktop`. Launcher:
-`muse-desktop` (or the Muse icon in the app grid).
+## Tests
+
+```bash
+cd apps/muse/daemon && npm test
+```
+
+Profile (isolated): `${XDG_CONFIG_HOME:-~/.config}/muse-desktop`.
