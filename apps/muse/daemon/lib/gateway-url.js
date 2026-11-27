@@ -35,6 +35,9 @@ function vmIdFromGatewayUrl(gatewayUrl, vmName = null) {
   if (fromQuery && fromHost && fromQuery !== fromHost) {
     throw new Error('Shared Agent Noise gateway vm_id does not match its host identity');
   }
+  if (!fromQuery && fromName && fromHost && fromName !== fromHost) {
+    throw new Error('Shared Agent Noise gateway host does not match the VM name');
+  }
   return vmId;
 }
 
