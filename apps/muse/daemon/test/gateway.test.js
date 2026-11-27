@@ -79,10 +79,10 @@ async function fakeGateway({ message2 = Buffer.from('attestation'), onRequest } 
       if (assembled === null) return;
       const envelope = decodeServiceRequest(assembled);
       const request = decodeServiceFrame(envelope.payload, { allowRequest: true });
-      const send = (body, status = 200) => {
+      const send = (body, status = 200, endBody = true) => {
         const serviceFrame = encodeServiceFrame({
           streamId: request.streamId,
-          kind: { case: 'response', value: { status, headers: [], body, endBody: true } },
+          kind: { case: 'response', value: { status, headers: [], body, endBody } },
         });
         for (const frame of chunkPayload(encodeServiceResponse({ payload: serviceFrame }))) {
           serverSocket.send(serverSend.encryptWithAd(EMPTY, frame));
@@ -134,6 +134,26 @@ test('gateway rejects oversized or modified handshake messages', async () => {
     createWebSocket: () => fake.clientSocket,
     maxMessageBytes: 10,
   }), /message too large/);
+});
+
+test('subscriptions resolve their header and keep the stream active for later RPCs', async () => {
+  const fake = await fakeGateway({
+    onRequest(request, send) {
+      if (request.kind.value.path === '/chat/subscribe') send(Buffer.alloc(0), 200, false);
+      else send(Buffer.from('{"ok":true}'));
+    },
+  });
+  const connection = await connectNoiseGateway({ url: 'wss://gateway.invalid/', createWebSocket: () => fake.clientSocket });
+  const rpc = new NoiseRpcClient(connection);
+  const subscription = await rpc.subscribe({ method: 'POST', path: '/chat/subscribe', params: {} });
+  assert.equal(subscription.status, 200);
+  assert.equal(subscription.subscription, true);
+  assert.equal(rpc.pending.size, 1);
+  const response = await rpc.requestJson({ method: 'POST', path: '/api/ping' });
+  assert.deepEqual(response.json, { ok: true });
+  assert.equal(rpc.pending.size, 1);
+  rpc.close();
+  connection.close();
 });
 
 test('RPC surfaces HTTP errors and GET query encoding', async () => {

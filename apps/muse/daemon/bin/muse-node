@@ -7,7 +7,7 @@ const { connectPrimaryGateway } = require('../lib/primary');
 const { NoiseRpcClient } = require('../lib/rpc');
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
 
-async function probe(profile, { cold = false } = {}) {
+async function openGateway(profile, { cold = false } = {}) {
   const identity = loadOrCreateIdentity(profile);
   console.log(`[muse-node] identity ${identity.nodeId} (${identity.displayName})`);
   console.log(`[muse-node] requesting ${cold ? 'cold-CVM' : 'standard VM'} credentials from the Muse shell…`);
@@ -23,14 +23,57 @@ async function probe(profile, { cold = false } = {}) {
     throw error;
   }
   console.log(`[muse-node] handshake OK: type=${connection.observedType} rv=${connection.rvChallenge?.state ?? 'none'}`);
-  const rpc = new NoiseRpcClient(connection);
+  return { identity, session, connection, rpc: new NoiseRpcClient(connection) };
+}
+
+function reportRpcError(connection, error) {
+  console.error(`[muse-node] RPC failed: ${error.message}`);
+  if (connection.lastFrameError) console.error(`[muse-node] frame error: ${connection.lastFrameError.stack}`);
+  if (connection.closeInfo) console.error(`[muse-node] close: ${JSON.stringify(connection.closeInfo)}`);
+}
+
+async function probe(profile, options = {}) {
+  const { connection, rpc } = await openGateway(profile, options);
   try {
     const response = await rpc.requestJson({ method: 'POST', path: '/api/ping' });
     console.log(`[muse-node] connection.ping HTTP ${response.status}: ${JSON.stringify(response.json)}`);
   } catch (error) {
-    console.error(`[muse-node] RPC failed: ${error.message}`);
-    if (connection.lastFrameError) console.error(`[muse-node] frame error: ${connection.lastFrameError.stack}`);
-    if (connection.closeInfo) console.error(`[muse-node] close: ${JSON.stringify(connection.closeInfo)}`);
+    reportRpcError(connection, error);
+    throw error;
+  } finally {
+    rpc.close();
+    connection.close();
+  }
+}
+
+async function register(profile, options = {}) {
+  const { identity, connection, rpc } = await openGateway(profile, options);
+  try {
+    let subscriptionBytes = 0;
+    const subscription = await rpc.subscribe({
+      method: 'POST',
+      path: '/chat/subscribe',
+      params: {},
+      onBodyChunk: (data) => { subscriptionBytes += data.length; },
+      onStreamError: (error) => console.error(`[muse-node] chat.subscribe ended: ${error.message}`),
+    });
+    console.log(`[muse-node] chat.subscribe HTTP ${subscription.status}; stream ${subscription.streamId} active`);
+    const registration = await rpc.requestJson({
+      method: 'POST',
+      path: '/api/nodes/register',
+      params: {
+        node_id: identity.nodeId,
+        display_name: identity.displayName,
+        platform: 'linux',
+        commands_v2: { ping: { description: 'Connection liveness check' } },
+      },
+    });
+    console.log(`[muse-node] node.register HTTP ${registration.status}: ${JSON.stringify(registration.json)}`);
+    const nodes = await rpc.requestJson({ method: 'POST', path: '/api/nodes/list', params: {} });
+    console.log(`[muse-node] node.list HTTP ${nodes.status}: ${JSON.stringify(nodes.json)}`);
+    console.log(`[muse-node] chat.subscribe bytes while registering: ${subscriptionBytes}`);
+  } catch (error) {
+    reportRpcError(connection, error);
     throw error;
   } finally {
     rpc.close();
@@ -46,7 +89,9 @@ async function main() {
     console.log(JSON.stringify({ nodeId: identity.nodeId, displayName: identity.displayName, platform: identity.platform, profile: path.join(profile, 'node-identity.json') }, null, 2));
     return;
   }
-  if (command === 'probe') return probe(profile, { cold: process.argv.includes('--cold') });
+  const options = { cold: process.argv.includes('--cold') };
+  if (command === 'probe') return probe(profile, options);
+  if (command === 'register') return register(profile, options);
   throw new Error(`Unknown command: ${command}`);
 }
 

@@ -39,36 +39,66 @@ class NoiseRpcClient {
   async receive(encryptedFrame) {
     const frame = await this.transport.decryptFrame(encryptedFrame);
     if (!frame) return;
-    const pending = this.pending.get(frame.streamId.toString());
+    const key = frame.streamId.toString();
+    const pending = this.pending.get(key);
     if (!pending) {
       if (this.onUnsolicitedFrame) await this.onUnsolicitedFrame(frame);
       return;
     }
     if (frame.case === 'reset') {
-      this.pending.delete(frame.streamId.toString());
+      this.pending.delete(key);
       clearTimeout(pending.timer);
-      pending.reject(new Error(`Noise RPC stream reset (${frame.reset.code}): ${frame.reset.reason}`));
+      const error = new Error(`Noise RPC stream reset (${frame.reset.code}): ${frame.reset.reason}`);
+      if (pending.headerResolved) pending.onStreamError?.(error);
+      else pending.reject(error);
       return;
     }
+    let data = EMPTY;
     if (frame.case === 'response') {
       pending.status = frame.response.status;
       pending.headers = frame.response.headers;
-      if (frame.response.body.length) pending.parts.push(frame.response.body);
+      data = frame.response.body;
       if (frame.response.endBody) pending.done = true;
     } else if (frame.case === 'bodyChunk') {
-      if (frame.data.length) pending.parts.push(frame.data);
-      if (pending.onBodyChunk) await pending.onBodyChunk(frame.data, frame.endBody);
+      data = frame.data;
       if (frame.endBody) pending.done = true;
     }
+    if (pending.subscription && data.length && pending.onBodyChunk) {
+      await pending.onBodyChunk(data, pending.done);
+    }
+    if (!pending.subscription || !pending.headerResolved) {
+      if (data.length) pending.parts.push(data);
+    }
+    if (pending.subscription && pending.status > 0 && !pending.headerResolved) {
+      if (!(pending.done && (pending.status < 200 || pending.status >= 300))) {
+        pending.headerResolved = true;
+        pending.parts = [];
+        clearTimeout(pending.timer);
+        pending.resolve({
+          streamId: frame.streamId,
+          status: pending.status,
+          headers: pending.headers,
+          body: EMPTY,
+          subscription: true,
+        });
+      }
+    }
     if (pending.done) {
-      this.pending.delete(frame.streamId.toString());
+      this.pending.delete(key);
       clearTimeout(pending.timer);
-      pending.resolve({
+      if (pending.headerResolved) {
+        pending.onStreamEnd?.();
+        return;
+      }
+      const response = {
         streamId: frame.streamId,
         status: pending.status,
         headers: pending.headers,
         body: concat(...pending.parts),
-      });
+      };
+      if (pending.subscription && (response.status < 200 || response.status >= 300)) {
+        pending.reject(new Error(`Noise subscription failed with HTTP ${response.status}: ${Buffer.from(response.body).toString('utf8').slice(0, 500)}`));
+      } else pending.resolve(response);
     }
   }
 
@@ -88,7 +118,10 @@ class NoiseRpcClient {
     return headers;
   }
 
-  async request({ method, path, params, body, headers = [], service = 'daemon', signal, onBodyChunk }) {
+  async request({
+    method, path, params, body, headers = [], service = 'daemon', signal,
+    onBodyChunk, subscription = false, onStreamError, onStreamEnd,
+  }) {
     if (this.closed) throw new Error('Noise RPC client is closed');
     const upperMethod = method.toUpperCase();
     const isGet = upperMethod === 'GET';
@@ -125,6 +158,10 @@ class NoiseRpcClient {
         parts: [],
         done: false,
         onBodyChunk,
+        subscription,
+        headerResolved: false,
+        onStreamError,
+        onStreamEnd,
       });
       if (signal) {
         if (signal.aborted) return onAbort();
@@ -132,6 +169,10 @@ class NoiseRpcClient {
       }
       for (const frame of request.frames) this.connection.ws.send(frame);
     });
+  }
+
+  async subscribe(options) {
+    return this.request({ ...options, subscription: true });
   }
 
   async requestJson(options) {
@@ -151,7 +192,8 @@ class NoiseRpcClient {
     this.closed = true;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(reason);
+      if (pending.headerResolved) pending.onStreamError?.(reason);
+      else pending.reject(reason);
     }
     this.pending.clear();
     this.removeFrameHandler?.();
