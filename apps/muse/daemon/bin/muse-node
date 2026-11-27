@@ -1,0 +1,215 @@
+#!/usr/bin/env node
+'use strict';
+
+const path = require('node:path');
+const { brokerRequest } = require('../../client/broker');
+const { JsonStreamParser } = require('../lib/json-stream');
+const { connectPrimaryGateway } = require('../lib/primary');
+const { NoiseRpcClient } = require('../lib/rpc');
+const { createCommandRegistry } = require('../lib/commands');
+const { MuseNodeService } = require('../lib/node-service');
+const { createZenityApprover } = require('../lib/approval');
+const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
+
+async function openGateway(profile, { cold = false } = {}) {
+  const identity = loadOrCreateIdentity(profile);
+  console.log(`[muse-node] identity ${identity.nodeId} (${identity.displayName})`);
+  console.log(`[muse-node] requesting ${cold ? 'cold-CVM' : 'standard VM'} credentials from the Muse shell…`);
+  const method = cold ? 'credentials.coldLease' : 'credentials.standardSession';
+  const session = await brokerRequest(profile, method, {}, { timeoutMs: 120000 });
+  console.log(`[muse-node] VM ${session.vmId}; opening Noise_XX_25519_AESGCM_SHA256…`);
+  let connection;
+  try {
+    connection = await connectPrimaryGateway({ session, recoverySecret: identity.recoverySecret });
+  } catch (error) {
+    console.error(`[muse-node] handshake failed: ${error.code ?? error.name}: ${error.message}`);
+    if (error.rvState) console.error(`[muse-node] server RV state: ${error.rvState}`);
+    throw error;
+  }
+  console.log(`[muse-node] handshake OK: type=${connection.observedType} rv=${connection.rvChallenge?.state ?? 'none'}`);
+  return { identity, session, connection, rpc: new NoiseRpcClient(connection) };
+}
+
+function reportRpcError(connection, error) {
+  console.error(`[muse-node] RPC failed: ${error.message}`);
+  if (connection.lastFrameError) console.error(`[muse-node] frame error: ${connection.lastFrameError.stack}`);
+  if (connection.closeInfo) console.error(`[muse-node] close: ${JSON.stringify(connection.closeInfo)}`);
+}
+
+async function subscribe(rpc, onEvent = null, nodeId = null) {
+  const parser = new JsonStreamParser();
+  return rpc.subscribe({
+    method: 'POST',
+    path: '/chat/subscribe',
+    params: nodeId ? { node_id: nodeId } : {},
+    onBodyChunk: async (data) => {
+      for (const event of parser.push(data)) {
+        if (onEvent) await onEvent(event);
+        else if (process.env.MUSE_DEBUG_SUBSCRIPTION === '1') console.log(`[muse-node] event ${event.event ?? event.type ?? 'subscription.ready'}`);
+      }
+    },
+    onStreamError: (error) => console.error(`[muse-node] chat.subscribe ended: ${error.message}`),
+  });
+}
+
+function nodeSummary(node) {
+  return {
+    node_id: node.node_id,
+    display_name: node.display_name,
+    platform: node.platform,
+    online: node.online,
+    connection_state: node.connection_state,
+    pairing_status: node.pairing_status,
+    commands: Object.keys(node.commands_v2 ?? {}),
+  };
+}
+
+async function listNodes(rpc) {
+  const response = await rpc.requestJson({ method: 'POST', path: '/api/nodes/list', params: {} });
+  const nodes = response.json?.nodes ?? [];
+  console.log(`[muse-node] node.list HTTP ${response.status}: ${JSON.stringify(nodes.map(nodeSummary))}`);
+  return nodes;
+}
+
+async function probe(profile, options = {}) {
+  const { connection, rpc } = await openGateway(profile, options);
+  try {
+    const response = await rpc.requestJson({ method: 'POST', path: '/api/ping' });
+    console.log(`[muse-node] connection.ping HTTP ${response.status}: ${JSON.stringify(response.json)}`);
+  } catch (error) {
+    reportRpcError(connection, error);
+    throw error;
+  } finally {
+    rpc.close();
+    connection.close();
+  }
+}
+
+async function register(profile, options = {}) {
+  const { identity, connection, rpc } = await openGateway(profile, options);
+  let heartbeat = null;
+  try {
+    const subscription = await subscribe(rpc, async (event) => {
+      if (event.event === 'node.connected') {
+        console.log(`[muse-node] node.connected: ${JSON.stringify(event.payload)}`);
+      } else if (event.event === 'client.invoke') {
+        console.log(`[muse-node] client.invoke: ${JSON.stringify({ command_id: event.payload?.command_id, invoke_id: event.payload?.invoke_id })}`);
+      } else if (process.env.MUSE_DEBUG_SUBSCRIPTION === '1') {
+        console.log(`[muse-node] event ${event.event ?? event.type ?? 'subscription.ready'}`);
+      }
+    }, identity.nodeId);
+    console.log(`[muse-node] chat.subscribe HTTP ${subscription.status}; stream ${subscription.streamId} active`);
+    const registration = await rpc.requestJson({
+      method: 'POST',
+      path: '/api/nodes/register',
+      params: {
+        node_id: identity.nodeId,
+        display_name: identity.displayName,
+        platform: 'linux',
+        commands_v2: { ping: { description: 'Connection liveness check' } },
+      },
+    });
+    console.log(`[muse-node] node.register HTTP ${registration.status}: ${JSON.stringify(registration.json)}`);
+    const beat = await rpc.requestJson({ method: 'POST', path: '/api/nodes/heartbeat', params: { node_id: identity.nodeId } });
+    console.log(`[muse-node] node.heartbeat HTTP ${beat.status}: ${JSON.stringify(beat.json)}`);
+    await listNodes(rpc);
+    if (options.stayMs > 0) {
+      console.log(`[muse-node] staying online for ${options.stayMs} ms…`);
+      heartbeat = setInterval(async () => {
+        try {
+          await rpc.requestJson({ method: 'POST', path: '/api/nodes/heartbeat', params: { node_id: identity.nodeId } });
+          console.log('[muse-node] heartbeat ok');
+        } catch (error) { console.error(`[muse-node] heartbeat failed: ${error.message}`); }
+      }, 15000);
+      await new Promise((resolve) => setTimeout(resolve, options.stayMs));
+    }
+  } catch (error) {
+    reportRpcError(connection, error);
+    throw error;
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    rpc.close();
+    connection.close();
+  }
+}
+
+async function nodes(profile, options = {}) {
+  const { connection, rpc } = await openGateway(profile, options);
+  try {
+    await subscribe(rpc);
+    await listNodes(rpc);
+  } catch (error) {
+    reportRpcError(connection, error);
+    throw error;
+  } finally {
+    rpc.close();
+    connection.close();
+  }
+}
+
+// Long-running node: one gateway session at a time; when the gateway closes
+// the socket (idle, redeploy, protocol error) reconnect with capped backoff so
+// Muse never sees the computer go silent for good.
+async function start(profile, options = {}) {
+  let stopping = false;
+  let wake = null;
+  const stop = () => { stopping = true; wake?.(); };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  let backoffMs = 1000;
+  while (!stopping) {
+    let session = null;
+    try {
+      session = await openGateway(profile, options);
+      const { identity, connection, rpc } = session;
+      const registry = createCommandRegistry({ approve: createZenityApprover() });
+      const service = new MuseNodeService({ rpc, identity, registry });
+      session.service = service;
+      const closed = new Promise((resolve) => {
+        wake = resolve;
+        connection.ws.addEventListener('close', resolve, { once: true });
+      });
+      const { registration } = await service.start();
+      console.log(`[muse-node] online as ${identity.displayName}: ${JSON.stringify(registration)}`);
+      console.log(`[muse-node] commands: ${Object.keys(registry.definitions).join(', ')}`);
+      backoffMs = 1000;
+      await closed;
+      if (!stopping) console.error(`[muse-node] gateway closed: ${JSON.stringify(connection.closeInfo)}; reconnecting`);
+    } catch (error) {
+      console.error(`[muse-node] session failed: ${error.message}`);
+    } finally {
+      await session?.service?.close();
+      session?.rpc.close();
+      session?.connection.close();
+    }
+    if (stopping) break;
+    await new Promise((resolve) => { wake = resolve; setTimeout(resolve, backoffMs); });
+    backoffMs = Math.min(backoffMs * 2, 60000);
+  }
+}
+
+function stayMs() {
+  const argument = process.argv.find((value) => value.startsWith('--stay-ms='));
+  return argument ? Number(argument.split('=')[1]) : 0;
+}
+
+async function main() {
+  const command = process.argv[2] ?? 'probe';
+  const profile = defaultProfile();
+  if (command === 'identity') {
+    const identity = loadOrCreateIdentity(profile);
+    console.log(JSON.stringify({ nodeId: identity.nodeId, displayName: identity.displayName, platform: identity.platform, profile: path.join(profile, 'node-identity.json') }, null, 2));
+    return;
+  }
+  const options = { cold: process.argv.includes('--cold'), stayMs: stayMs() };
+  if (command === 'probe') return probe(profile, options);
+  if (command === 'register') return register(profile, options);
+  if (command === 'nodes') return nodes(profile, options);
+  if (command === 'start') return start(profile, options);
+  throw new Error(`Unknown command: ${command}`);
+}
+
+main().catch((error) => {
+  console.error(`[muse-node] ${error.message}`);
+  process.exitCode = 1;
+});
