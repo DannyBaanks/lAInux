@@ -34,6 +34,21 @@ async function hatchJson(fetchImpl, path, { method = 'GET', body, timeoutMs = 35
   return json;
 }
 
+async function leaseVm(fetchImpl, vmType = 'standard') {
+  const json = await hatchJson(fetchImpl, '/api/hatch/lease-vm', {
+    method: 'POST', body: { vmType },
+  });
+  if (json.status !== 'assigned' || typeof json.gatewayUrl !== 'string' || !json.gatewayUrl.trim()
+      || typeof json.vmName !== 'string' || !json.vmName.trim()) {
+    throw new Error('VM lease returned an invalid assignment');
+  }
+  return {
+    gatewayUrl: json.gatewayUrl.trim(),
+    vmName: json.vmName.trim(),
+    ...(typeof json.vmId === 'string' && json.vmId.trim() ? { vmId: json.vmId.trim() } : {}),
+  };
+}
+
 async function reserveColdLease(fetchImpl, idempotencyKey = randomUUID()) {
   const json = await hatchJson(fetchImpl, '/api/hatch/cold-lease-cvm', {
     method: 'POST', body: { idempotencyKey },
@@ -107,4 +122,17 @@ async function noiseNotaryToken(fetchImpl, vmName) {
   return json.notaryToken.trim();
 }
 
-module.exports = { hatchJson, reserveColdLease, coldLeaseSession, acquireColdLease, noiseToken, noiseNotaryToken };
+async function standardSession(fetchImpl, { vmType = 'standard', forceRefresh = false } = {}) {
+  const assignment = await leaseVm(fetchImpl, vmType);
+  const token = await noiseToken(fetchImpl, { ...assignment, forceRefresh });
+  const notary = token.noiseNotaryToken || await noiseNotaryToken(fetchImpl, assignment.vmName);
+  return {
+    ...assignment,
+    vmId: assignment.vmId ?? assignment.vmName,
+    vmType,
+    authToken: token.authToken,
+    noiseNotaryToken: notary,
+  };
+}
+
+module.exports = { hatchJson, leaseVm, standardSession, reserveColdLease, coldLeaseSession, acquireColdLease, noiseToken, noiseNotaryToken };

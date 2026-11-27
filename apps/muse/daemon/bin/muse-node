@@ -7,11 +7,12 @@ const { connectPrimaryGateway } = require('../lib/primary');
 const { NoiseRpcClient } = require('../lib/rpc');
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
 
-async function probe(profile) {
+async function probe(profile, { cold = false } = {}) {
   const identity = loadOrCreateIdentity(profile);
   console.log(`[muse-node] identity ${identity.nodeId} (${identity.displayName})`);
-  console.log('[muse-node] requesting cold-lease credentials from the Muse shell…');
-  const session = await brokerRequest(profile, 'credentials.coldLease', {}, { timeoutMs: 120000 });
+  console.log(`[muse-node] requesting ${cold ? 'cold-CVM' : 'standard VM'} credentials from the Muse shell…`);
+  const method = cold ? 'credentials.coldLease' : 'credentials.standardSession';
+  const session = await brokerRequest(profile, method, {}, { timeoutMs: 120000 });
   console.log(`[muse-node] VM ${session.vmId}; opening Noise_XX_25519_AESGCM_SHA256…`);
   let connection;
   try {
@@ -40,7 +41,7 @@ async function main() {
     console.log(JSON.stringify({ nodeId: identity.nodeId, displayName: identity.displayName, platform: identity.platform, profile: path.join(profile, 'node-identity.json') }, null, 2));
     return;
   }
-  if (command === 'probe') return probe(profile);
+  if (command === 'probe') return probe(profile, { cold: process.argv.includes('--cold') });
   throw new Error(`Unknown command: ${command}`);
 }
 

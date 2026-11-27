@@ -3,7 +3,7 @@
 // no Electron fingerprint, login (auth.meta.com / accountscenter) inside the
 // window, auth popups allowed. The protocol-native client (edge-chat WS,
 // native composer) grows inside this same shell.
-const { app, BrowserWindow, Menu, session } = require('electron');
+const { app, BrowserWindow, Menu } = require('electron');
 const os = require('os');
 const path = require('path');
 const { startCredentialBroker } = require('./broker');
@@ -12,6 +12,7 @@ const {
   coldLeaseSession,
   noiseNotaryToken,
   noiseToken,
+  standardSession,
 } = require('../daemon/lib/credentials');
 
 const PROFILE = process.env.MUSE_PROFILE || path.join(
@@ -96,12 +97,38 @@ function makeWindow(url) {
   return w;
 }
 
-const hatchFetch = (input, init) => session.fromPartition(PARTITION).fetch(input, init);
+let win = null;
+
+async function hatchFetch(input, init = {}) {
+  if (!win || win.isDestroyed()) throw new Error('Muse window is not ready');
+  const { signal: _signal, ...options } = init;
+  const script = `(async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 35000);
+    try {
+      const response = await fetch(${JSON.stringify(input)}, {
+        ...${JSON.stringify(options)},
+        signal: controller.signal,
+      });
+      return { status: response.status, ok: response.ok, text: await response.text() };
+    } finally {
+      clearTimeout(timer);
+    }
+  })()`;
+  const result = await win.webContents.executeJavaScript(script, true);
+  return {
+    status: result.status,
+    ok: result.ok,
+    text: async () => result.text,
+  };
+}
 
 async function handleBrokerRequest(method, params) {
   switch (method) {
     case 'session.status':
-      return { ready: app.isReady(), partition: PARTITION };
+      return { ready: app.isReady(), partition: PARTITION, url: win?.webContents.getURL() ?? null };
+    case 'credentials.standardSession':
+      return standardSession(hatchFetch, params);
     case 'credentials.coldLease':
       return acquireColdLease(hatchFetch, { timeoutMs: 90000 });
     case 'credentials.coldSession':
@@ -119,7 +146,6 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  let win = null;
   let broker = null;
 
   app.on('second-instance', () => {

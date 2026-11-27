@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { reserveColdLease, coldLeaseSession, noiseToken } = require('../lib/credentials');
+const { reserveColdLease, coldLeaseSession, noiseToken, standardSession } = require('../lib/credentials');
 
 const vmId = '123e4567-e89b-42d3-a456-426614174000';
 
@@ -37,6 +37,26 @@ test('cold lease rejects identity mismatches and missing tokens', async () => {
     vmId, vmName: vmId, gatewayUrl: `https://${vmId}/`, authToken: '', noiseNotaryToken: 'n', notaryTokenExpirationTs: null,
   } });
   await assert.rejects(coldLeaseSession(missing, vmId), /authToken/);
+});
+
+test('standard session leases a VM, obtains tokens and fills notary fallback', async () => {
+  const paths = [];
+  const fetchImpl = async (url, options) => {
+    paths.push(url);
+    if (url.endsWith('/api/hatch/lease-vm')) {
+      assert.deepEqual(JSON.parse(options.body), { vmType: 'standard' });
+      return response({ status: 'assigned', gatewayUrl: 'https://vm-test/', vmName: 'vm-test' });
+    }
+    if (url.endsWith('/api/hatch/token')) return response({ token: 'auth', notary_token: null });
+    return response({ notaryToken: 'notary' });
+  };
+  const session = await standardSession(fetchImpl);
+  assert.equal(session.vmId, 'vm-test');
+  assert.equal(session.authToken, 'auth');
+  assert.equal(session.noiseNotaryToken, 'notary');
+  assert.deepEqual(paths.map((path) => new URL(path).pathname), [
+    '/api/hatch/lease-vm', '/api/hatch/token', '/api/hatch/noise-notary-token',
+  ]);
 });
 
 test('noise token posts vmAddress and force_refresh', async () => {
