@@ -19,6 +19,7 @@ Unlike the Electron apps in this corpus, Meta ships **Muse** (`com.meta.endo`) a
 - **8 native Linux commands** — `ping`, `system.which`, `files.list`, `files.search`, `files.read`, plus approval-gated `files.write`, `files.mkdir`, and `shell.exec`.
 - **Fail-closed native approvals (`zenity`)** — every write, mkdir, or shell command opens a native confirmation dialog with a bounded preview. **Rechazar** is the default button (an accidental Enter denies); timeout, window close, or missing display all return `permission_denied`.
 - **`systemd --user` service** — `./apps/muse/daemon/install-service.sh` runs `muse-node.service` with your graphical session (`--uninstall` removes it cleanly).
+- **🧾 Verified live (2026-11-27)** — from its own chat window, Muse listed a Linux folder, quoted a file word for word, created a folder, wrote a file and ran a shell command (each one approved in the dialog); a rejected command came back as `permission_denied` and changed nothing. Evidence: [`apps/muse/docs/evidence/`](apps/muse/docs/evidence/).
 
 ```bash
 ./transmute.sh muse install                  # pinned Electron shell + DMG icon
