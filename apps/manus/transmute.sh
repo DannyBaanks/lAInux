@@ -218,7 +218,7 @@ log_ok "Installed $DEST"
 if $DO_INTEGRATE; then
     write_launcher "$BIN_DIR/manus" "$DEST" manus "$MANUS_TITLE"
     write_desktop_entry "$DESKTOP_DIR/manus.desktop" "$MANUS_TITLE" "Manus AI Desktop (native Linux port)" \
-        "$BIN_DIR/manus" "$DEST/resources/icon.png" "$MANUS_TITLE" manus \
+        "$BIN_DIR/manus" "$DEST/resources/icon.png" "${MANUS_WMCLASS:-im.manus.ManusStudio}" manus \
         "Utility;Network;ArtificialIntelligence;Development;"
 fi
 
