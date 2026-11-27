@@ -105,6 +105,13 @@ DMG at build time, hash-pinned. The WINS Mach-O re-host of the actual binary is
 **parked** (SwiftUI+AppKit+Metal surface = DS3-scale; wins-macho corpus is
 CLI-only today, 19/19 Sonoma).
 
+**Staged status (2026-11-27):** v0 shell installed — muse.ai in a hardened
+Electron window (UA without the Electron token, meta-domain permission
+allowlist, auth popups in-app on the same persistent partition, icon from the
+DMG). v1 protocol-native: gated on the logged-in capture of muse.ai
+(login OIDC dance, `wss://edge-chat-latest.meta.ai` frames, TTS stream
+headers) — that capture defines request shapes for the native composer.
+
 ## 9. Repro
 
 ```bash

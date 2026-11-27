@@ -20,13 +20,18 @@ attestation risk, repro commands).
 |---|---|
 | `verify` (DMG pin) | DONE — Muse-14.1 sha256 pinned in `pins.env` |
 | `inspect` (RE extraction) | DONE — findings land in the lAInux cache + `docs/PROTOCOL.md` |
+| `install` (v0 shell) | DONE — muse.ai in a hardened Electron window, isolated profile, icon extracted from the pinned DMG |
 | web-traffic capture (muse.ai logged-in) | NEXT — ground truth for request shapes |
-| `build` / `install` | NOT YET — fails closed until protocol RE gate passes |
+| v1 protocol-native client | NOT YET — gated on the capture; grows inside the same shell |
 | WINS Mach-O re-host of the real binary | PARKED — DS3-scale (SwiftUI surface); see PROTOCOL.md §8 |
 
 ## Usage
 
 ```bash
+./transmute.sh muse install                           # v0 shell + icon (pinned Electron 43.6.0)
 ./transmute.sh muse inspect [path/to/Muse-14.1.dmg]   # verify pin + extract + strings + dylibs
-./transmute.sh muse verify [path/to/Muse-14.1.dmg]   # pin check only
+./transmute.sh muse verify [path/to/Muse-14.1.dmg]    # pin check only
 ```
+
+Profile (isolated): `${XDG_CONFIG_HOME:-~/.config}/muse-desktop`. Launcher:
+`muse-desktop` (or the Muse icon in the app grid).
