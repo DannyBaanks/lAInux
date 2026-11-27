@@ -8,6 +8,7 @@ const { connectPrimaryGateway } = require('../lib/primary');
 const { NoiseRpcClient } = require('../lib/rpc');
 const { createCommandRegistry } = require('../lib/commands');
 const { MuseNodeService } = require('../lib/node-service');
+const { createZenityApprover } = require('../lib/approval');
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
 
 async function openGateway(profile, { cold = false } = {}) {
@@ -161,7 +162,7 @@ async function start(profile, options = {}) {
     try {
       session = await openGateway(profile, options);
       const { identity, connection, rpc } = session;
-      const registry = createCommandRegistry();
+      const registry = createCommandRegistry({ approve: createZenityApprover() });
       const service = new MuseNodeService({ rpc, identity, registry });
       session.service = service;
       const closed = new Promise((resolve) => {

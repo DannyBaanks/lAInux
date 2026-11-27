@@ -291,19 +291,19 @@ function createCommandRegistry({ approve = async () => false } = {}) {
       required: {
         path: string('Absolute file path to write, including filename.'),
         content: string('Full new UTF-8 contents.'),
-      }, permissions: ['filesystem'],
+      }, permissions: ['filesystem'], timeoutMs: 120000,
     }),
     'files.mkdir': schema('Create a folder on this Linux computer after user approval.', {
       required: { path: string('Absolute folder path to create.') },
       optional: { create_intermediates: boolean('Also create missing parents; default false.') },
-      permissions: ['filesystem'],
+      permissions: ['filesystem'], timeoutMs: 120000,
     }),
     'shell.exec': schema('Execute a command through /bin/bash on this Linux computer after explicit user approval.', {
       required: { command: string('Full shell command to execute.') },
       optional: {
         cwd: string('Working directory; defaults to the Linux home.'),
         timeout_ms: integer('Timeout in milliseconds, default 30000, max 120000.'),
-      }, permissions: ['shell'], timeoutMs: 125000,
+      }, permissions: ['shell'], timeoutMs: 240000,
     }),
   };
   const handlers = {
