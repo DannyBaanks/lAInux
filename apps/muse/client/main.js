@@ -3,9 +3,16 @@
 // no Electron fingerprint, login (auth.meta.com / accountscenter) inside the
 // window, auth popups allowed. The protocol-native client (edge-chat WS,
 // native composer) grows inside this same shell.
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, session } = require('electron');
 const os = require('os');
 const path = require('path');
+const { startCredentialBroker } = require('./broker');
+const {
+  acquireColdLease,
+  coldLeaseSession,
+  noiseNotaryToken,
+  noiseToken,
+} = require('../daemon/lib/credentials');
 
 const PROFILE = process.env.MUSE_PROFILE || path.join(
   process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
@@ -89,11 +96,31 @@ function makeWindow(url) {
   return w;
 }
 
+const hatchFetch = (input, init) => session.fromPartition(PARTITION).fetch(input, init);
+
+async function handleBrokerRequest(method, params) {
+  switch (method) {
+    case 'session.status':
+      return { ready: app.isReady(), partition: PARTITION };
+    case 'credentials.coldLease':
+      return acquireColdLease(hatchFetch, { timeoutMs: 90000 });
+    case 'credentials.coldSession':
+      return coldLeaseSession(hatchFetch, params.vmId);
+    case 'credentials.token':
+      return noiseToken(hatchFetch, params);
+    case 'credentials.notary':
+      return noiseNotaryToken(hatchFetch, params.vmName);
+    default:
+      throw new Error(`Unknown Muse broker method: ${method}`);
+  }
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   let win = null;
+  let broker = null;
 
   app.on('second-instance', () => {
     if (win) {
@@ -102,9 +129,19 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
+    try {
+      broker = await startCredentialBroker({ profile: PROFILE, handler: handleBrokerRequest });
+      console.log('[muse] local credential broker ready');
+    } catch (error) {
+      console.error('[muse] credential broker failed:', error.message);
+    }
     win = makeWindow(HOME_URL);
+  });
+
+  app.on('before-quit', () => {
+    broker?.close();
   });
 
   app.on('window-all-closed', () => app.quit());

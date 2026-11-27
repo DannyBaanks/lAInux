@@ -48,6 +48,12 @@ async function connectPrimaryGateway({
           return EMPTY;
         }
         observedType = 'confidential';
+        if (!verifyAttestation) {
+          const error = new Error(`RV ${rvChallenge.state} connection requires an attestation verifier`);
+          error.code = 'attestation_verifier_unavailable';
+          error.rvState = rvChallenge.state;
+          throw error;
+        }
         const attestationVerdict = verifyAttestation
           ? await verifyAttestation({
               observedType,

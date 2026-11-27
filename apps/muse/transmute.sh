@@ -159,6 +159,7 @@ cmd_install() {
     log_info "assembling client v$MUSE_CLIENT_VERSION…"
     mkdir -p "$stage/app"
     cp -a "$APP_DIR/client/." "$stage/app/"
+    cp -a "$APP_DIR/daemon" "$stage/daemon"
     cp "$stage/muse.png" "$stage/app/muse.png"
     cat > "$stage/muse" <<'WRAP'
 #!/usr/bin/env bash

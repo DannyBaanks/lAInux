@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+'use strict';
+
+const path = require('node:path');
+const { brokerRequest } = require('../../client/broker');
+const { connectPrimaryGateway } = require('../lib/primary');
+const { NoiseRpcClient } = require('../lib/rpc');
+const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
+
+async function probe(profile) {
+  const identity = loadOrCreateIdentity(profile);
+  console.log(`[muse-node] identity ${identity.nodeId} (${identity.displayName})`);
+  console.log('[muse-node] requesting cold-lease credentials from the Muse shell…');
+  const session = await brokerRequest(profile, 'credentials.coldLease', {}, { timeoutMs: 120000 });
+  console.log(`[muse-node] VM ${session.vmId}; opening Noise_XX_25519_AESGCM_SHA256…`);
+  let connection;
+  try {
+    connection = await connectPrimaryGateway({ session, recoverySecret: identity.recoverySecret });
+  } catch (error) {
+    console.error(`[muse-node] handshake failed: ${error.code ?? error.name}: ${error.message}`);
+    if (error.rvState) console.error(`[muse-node] server RV state: ${error.rvState}`);
+    throw error;
+  }
+  console.log(`[muse-node] handshake OK: type=${connection.observedType} rv=${connection.rvChallenge?.state ?? 'none'}`);
+  const rpc = new NoiseRpcClient(connection);
+  try {
+    const response = await rpc.requestJson({ method: 'GET', path: '/api/ping' });
+    console.log(`[muse-node] connection.ping HTTP ${response.status}: ${JSON.stringify(response.json)}`);
+  } finally {
+    rpc.close();
+    connection.close();
+  }
+}
+
+async function main() {
+  const command = process.argv[2] ?? 'probe';
+  const profile = defaultProfile();
+  if (command === 'identity') {
+    const identity = loadOrCreateIdentity(profile);
+    console.log(JSON.stringify({ nodeId: identity.nodeId, displayName: identity.displayName, platform: identity.platform, profile: path.join(profile, 'node-identity.json') }, null, 2));
+    return;
+  }
+  if (command === 'probe') return probe(profile);
+  throw new Error(`Unknown command: ${command}`);
+}
+
+main().catch((error) => {
+  console.error(`[muse-node] ${error.message}`);
+  process.exitCode = 1;
+});
