@@ -112,12 +112,139 @@ DMG). v1 protocol-native: gated on the logged-in capture of muse.ai
 (login OIDC dance, `wss://edge-chat-latest.meta.ai` frames, TTS stream
 headers) — that capture defines request shapes for the native composer.
 
-## 9. Repro
+## 9. Device link / computer node `[CURRENT 2026-11-27]`
+
+**Why this exists.** The web product (muse.ai) gives chat + cloud Secure VM, but
+the agent only reaches *your* machine through a **paired device**. The Mac app
+is that device: it signs in, enrolls a key with the user's CVM and registers as
+a **node** on the CVM gateway; the agent then invokes node commands (filesystem,
+Apple Notes/Mail/Calendar/Reminders/WhatsApp connectors, computer-use) with
+per-action HITL approval. The web UI has **no** way to add a computer (Settings →
+Dispositivos only lists the iPhone) and **no** custom-MCP connector path
+(Settings → Conectores is a curated marketplace; platform.muse.ai is
+submit-for-review). Linux therefore needs the node protocol implemented as a
+native daemon — the "Manus companion daemon" move.
+
+Evidence: Mac binary strings (v14.1) + muse.ai runtime JS chunks (the web client
+ships a complete Noise + gateway implementation) + live settings UI (logged-in
+profile snapshot, 2026-11-27).
+
+### 9.1 Auth chain
+
+| Piece | Value |
+|---|---|
+| OIDC client id | `1302642031697155` |
+| Authorize | `https://auth.muse.ai/oidc/muse/` |
+| Redirect | `https://muse.ai/oidc/callback` (then `hatch://` deep link) |
+| PKCE | `oauth_pkce_verifier`, `oauth_csrf_token`, `code_challenge_method` |
+| Web session bootstrap | `POST https://auth.meta.com/hatch/session/bootstrap/` |
+| URL schemes | `hatch` (both apps), `fb1408214714122653` (iOS FB SDK) |
+
+Web session cookies are enough for the same-origin hatch proxies below; a
+daemon can reuse the shell profile or replay the OIDC flow.
+
+### 9.2 CVM credential chain (same-origin, session cookies)
+
+| Step | Call | Returns |
+|---|---|---|
+| lease | `POST /api/hatch/lease-vm {vmType}` | lease attempt (`vmId`) |
+| credentials | `GET /api/hatch/cold-lease-cvm?vmId=<id>` | `{ok, session:{vmId, vmName, gatewayUrl, authToken, noiseNotaryToken, notaryTokenExpirationTs}}` |
+| notary | `POST /api/hatch/noise-notary-token {vmName}` | `{notaryToken}` |
+| wake | `/api/hatch/vm/wake` | (VM lifecycle) |
+
+`gatewayUrl` host is validated to equal `vmName`. Tokens can also arrive as
+`delegation.…` strings endorsed via `POST /v1/noise`.
+
+### 9.3 Noise transport (reference implementation in the web client)
+
+- Suite: `Noise_XX_25519_AESGCM_SHA256`; WebCrypto (`x25519_backend:
+  webcrypto|libsodium`), CipherState = AES-GCM 128-bit tag, 12-byte nonce
+  (4 zero + uint64 BE), HKDF-HMAC-SHA256 (`mixHash`/`mixKey`).
+- Flow: msg1 (ephemeral) → msg2 (server ephemeral+static, encrypted) → msg3
+  (client static + payload) → `split()` → transport keys. Attestation payload
+  travels in msg2/3; SEV-SNP verifier, tiers `off|staging|prod`,
+  `confidential_downgrade` / `attestation_failed` are hard failures.
+- Client static key: **rvKey = derive(recoveryKey, vmId)**. Recovery key lives
+  in IndexedDB `hatch-cvm-credentials/keys` (empty in the web profile → the web
+  app never enrolled a CVM key; enrollment required before any gateway dial).
+- Notary token: `getNoiseNotaryToken(gatewayUrl, vmName)` — cached or fetched
+  from `/api/hatch/noise-notary-token`; used in the WS URL/handshake.
+- WebSocket: `binaryType=arraybuffer`, URL carries `vm_id`, `auth_token`,
+  `app_id`, `request_id` (+ notary for primary policy).
+- Framing after handshake: HTTP-like request/response frames over Noise, with
+  streaming (`streamId`, data/reset) and chunked payloads
+  (`chunkId, chunkIndex, totalChunks`, ≤65489 bytes each), services (`yolk`,
+  `vm-noise`, …).
+
+### 9.4 Gateway RPC surface (from the client method table)
+
+```
+chat.subscribe / chat.stream / chat.send / chat.cancel / chat.resume /
+chat.stream-events / chat.search
+client.register_capabilities   /client/register-capabilities   (noiseOnly)
+client.invoke.result           /client/invoke-result           (noiseOnly)
+connection.ping                /api/ping                       (noiseOnly)
+node.register   /api/nodes/register  (alias /nodes/register)
+node.heartbeat  /api/nodes/heartbeat node.list /api/nodes/list
+node.unpair /api/nodes/unpair   node.rename /api/nodes/rename
+node.disconnect /api/nodes/disconnect
+nodes.invoke_result /nodes/invoke-result
+nodes.invoke_ack    /nodes/invoke-ack
+nodes.sync          /nodes/sync
+fs.* (list/read/write/search/subscribe), git.*, model.*, widgets.*,
+activity.*, identity/skills/spaces/theme/navigation subscriptions
+```
+
+- **Node registration payload** (web client, verified in chunk): 
+  `node.register {node_id, display_name, platform, commands_v2:{<command>:{description,…}}}`
+  The web client registers itself with only `ping`; the Mac app registers its
+  local connector/computer-use command surface the same way.
+- **Invokes**: the gateway pushes `client.invoke {command_id, invoke_id, payload}`;
+  the node replies `nodes.invoke_result {invoke_id, ok, payload_json}` (acks via
+  `nodes.invoke_ack`, backfill via `nodes.sync`).
+- **Device approval**: `/api/nodes/device-approval`,
+  `/api/nodes/recipient-approval`, `hatch_desktop:enable_device_approval_binding`,
+  `device_approval_binding`; enrollment states `UNENROLLED/ENROLLING/ENROLLED`;
+  flows `enroll_new | enroll_existing | unlock | replacement`; recovery-key
+  backup password errors (`ALREADY_REGISTERED`, `INVALID_PASSWORD`, …).
+
+### 9.5 What the Mac app exposes (command surface to port)
+
+Local connectors: **Filesystem** (list/search/read/write/create/delete),
+**Apple Notes**, **Apple Mail**, **Calendar**, **Reminders**, **WhatsApp** —
+each with `LocalConnectorHITL` defaults `auto_allow | always_ask`. Computer-use
+commands (click/drag/type/scroll/screenshot/observe) come from the same node
+dispatch (`hatch_node_operations`). A Linux daemon starts with the filesystem +
+shell + screen subset.
+
+### 9.6 Daemon plan (v2, Manus-style native system)
+
+1. **Enrollment**: generate recovery key (X25519), dial gateway with
+   `allowUnprovisionedEnrollment`, `completeProvisioning`, device approval —
+   once per machine; key persists under `~/.config/muse-desktop/` (own store).
+2. **Transport**: port the web client's NoiseXX + NoiseTransport to Node 24
+   (native WebSocket + WebCrypto); reuse the method table above.
+3. **Node**: `node.register` with `commands_v2` (fs.list/read/write/search,
+   shell.exec, screen.screenshot, open_app) + heartbeat; invoke loop with HITL
+   approval for writes.
+4. **Acceptance**: in chat, Muse lists/reads a file under `~/Documents` and
+   reports it came from the Linux computer; device appears in Settings →
+   Dispositivos.
+
+## 10. Repro
 
 ```bash
 # corpus root, DMG in ~/Descargas
 ./transmute.sh muse inspect            # verify pin + extract + strings + dylibs → cache
 ./transmute.sh muse inspect ~/Descargas/Muse-14.1.dmg
+
+# web client protocol evidence (needs a copy of the logged-in profile)
+rsync -a --exclude Cache --exclude 'Code Cache' --exclude GPUCache \
+  ~/.config/muse-desktop/ /tmp/opencode/muse-profile-copy/
+electron --no-sandbox apps/muse/tools/webclient-dump.js \
+  --profile /tmp/opencode/muse-profile-copy --out /tmp/opencode/muse-webclient
+# then fetch the listed chunks and grep the Noise/node RPC code:
+#   grep -l 'Noise_XX\|nodes/register\|client.invoke' /tmp/opencode/muse-webclient/*.js
 
 # raw manual path
 7zz x -so ~/Descargas/Muse-14.1.dmg "Muse Installer/Muse.app/Contents/MacOS/Muse" > /tmp/muse.bin
