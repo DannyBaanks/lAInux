@@ -174,7 +174,14 @@ daemon can reuse the shell profile or replay the OIDC flow.
 - Framing after handshake: HTTP-like request/response frames over Noise, with
   streaming (`streamId`, data/reset) and chunked payloads
   (`chunkId, chunkIndex, totalChunks`, ≤65489 bytes each), services (`yolk`,
-  `vm-noise`, …).
+  `vm-noise`, …). Requests use `ServiceRequest{service=1,payload=2}`; responses
+  use the different `ServiceResponse{payload=1}` envelope (verified live).
+- **Live Node port verified 2026-11-27:** `daemon/bin/muse-node probe` leases a
+  standard VM through the logged-in shell, completes Noise XX against
+  `wss://hatch.metaaivm.com/v1/noise` and receives HTTP 200 from POST
+  `/api/ping` (`{"ok":true,"server_ts_ms":…}`). Evidence:
+  `docs/evidence/2026-11-27-standard-noise-probe.log`. Cold-CVM currently
+  returns `cold_lease_disabled`; this is not yet a confidential-CVM enrollment.
 
 ### 9.4 Gateway RPC surface (from the client method table)
 

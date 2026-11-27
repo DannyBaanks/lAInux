@@ -11,6 +11,7 @@ const {
   encodeNoiseFrame,
   encodeServiceFrame,
   encodeServiceRequest,
+  encodeServiceResponse,
 } = require('../lib/proto');
 const { handshake } = require('./helpers');
 
@@ -30,7 +31,7 @@ function serverResponse(sendCipher, streamId, body) {
     streamId,
     kind: { case: 'response', value: { status: 200, headers: [{ key: 'x-test', value: 'yes' }], body, endBody: true } },
   });
-  return chunkPayload(encodeServiceRequest({ service: 'daemon', payload: serviceFrame }))
+  return chunkPayload(encodeServiceResponse({ payload: serviceFrame }))
     .map((frame) => sendCipher.encryptWithAd(EMPTY, frame));
 }
 

@@ -110,15 +110,20 @@ async function connectNoiseGateway({
     socket.send(message3);
     const [sendCipher, receiveCipher] = handshake.split();
     const transport = new NoiseTransport(sendCipher, receiveCipher);
-    return {
+    const connection = {
       ws: socket,
       transport,
       message2Payload,
       serverStaticPublicKey: context.serverStaticPublicKey,
       handshakeHash: context.handshakeHash,
+      closeInfo: null,
+      lastFrameError: null,
       setFrameHandler(handler) {
         const listener = (event) => {
-          Promise.resolve(handler(binaryBytes(event.data))).catch(() => socket.close());
+          Promise.resolve(handler(binaryBytes(event.data))).catch((error) => {
+            connection.lastFrameError = error;
+            socket.close(1000, 'Noise frame handler failed');
+          });
         };
         socket.addEventListener('message', listener);
         return () => socket.removeEventListener('message', listener);
@@ -127,6 +132,10 @@ async function connectNoiseGateway({
         socket.close(code, reason);
       },
     };
+    socket.addEventListener('close', (event) => {
+      connection.closeInfo = { code: event.code, reason: event.reason, wasClean: event.wasClean };
+    });
+    return connection;
   } catch (error) {
     if (handshake) handshake.destroy();
     try { socket.close(); } catch {}

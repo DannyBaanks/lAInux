@@ -77,7 +77,7 @@ async function connectPrimaryGateway({
         });
       },
     });
-    return { ...connection, vmId, observedType, rvChallenge };
+    return Object.assign(connection, { vmId, observedType, rvChallenge });
   } finally {
     rvKey.fill(0);
   }

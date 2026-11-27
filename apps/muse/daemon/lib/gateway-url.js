@@ -25,7 +25,8 @@ function vmIdFromGatewayUrl(gatewayUrl, vmName = null) {
   const queryIds = url.searchParams.getAll('vm_id');
   if (queryIds.length > 1) throw new Error('Shared Agent Noise gateway must contain at most one vm_id');
   const fromQuery = queryIds[0] || null;
-  const fromHost = url.hostname || null;
+  const hostname = url.hostname.toLowerCase();
+  const fromHost = hostname.endsWith('.metaaivm.com') ? hostname.slice(0, -'.metaaivm.com'.length) : hostname || null;
   const fromName = vmName == null ? null : validateVmId(vmName);
   const vmId = fromQuery ?? fromName ?? fromHost;
   validateVmId(vmId);

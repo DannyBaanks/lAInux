@@ -25,8 +25,13 @@ async function probe(profile, { cold = false } = {}) {
   console.log(`[muse-node] handshake OK: type=${connection.observedType} rv=${connection.rvChallenge?.state ?? 'none'}`);
   const rpc = new NoiseRpcClient(connection);
   try {
-    const response = await rpc.requestJson({ method: 'GET', path: '/api/ping' });
+    const response = await rpc.requestJson({ method: 'POST', path: '/api/ping' });
     console.log(`[muse-node] connection.ping HTTP ${response.status}: ${JSON.stringify(response.json)}`);
+  } catch (error) {
+    console.error(`[muse-node] RPC failed: ${error.message}`);
+    if (connection.lastFrameError) console.error(`[muse-node] frame error: ${connection.lastFrameError.stack}`);
+    if (connection.closeInfo) console.error(`[muse-node] close: ${JSON.stringify(connection.closeInfo)}`);
+    throw error;
   } finally {
     rpc.close();
     connection.close();

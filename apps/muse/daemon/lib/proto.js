@@ -158,6 +158,18 @@ function decodeServiceRequest(bytes) {
   return request;
 }
 
+function encodeServiceResponse({ payload = EMPTY }) {
+  return fieldBytes(1, payload);
+}
+
+function decodeServiceResponse(bytes) {
+  const response = { payload: EMPTY };
+  decodeFields(bytes, {
+    1: (reader, wire) => { expectWire(wire, 2, 'payload'); response.payload = reader.readBytes(); },
+  });
+  return response;
+}
+
 function encodeApplicationRequest(request) {
   const headers = (request.headers ?? []).map((header) => fieldBytes(3, encodeHeader(header)));
   return concat(
@@ -267,6 +279,8 @@ module.exports = {
   decodeNoiseFrame,
   encodeServiceRequest,
   decodeServiceRequest,
+  encodeServiceResponse,
+  decodeServiceResponse,
   encodeServiceFrame,
   decodeServiceFrame,
   decodeApplicationRequest,

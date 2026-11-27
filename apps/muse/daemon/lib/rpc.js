@@ -23,7 +23,7 @@ function jsonBody(body) {
 }
 
 class NoiseRpcClient {
-  constructor(connection, { requestTimeoutMs = 30000, appId = null, onUnsolicitedFrame = null } = {}) {
+  constructor(connection, { requestTimeoutMs = 30000, appId = 'hatch-web', onUnsolicitedFrame = null } = {}) {
     this.connection = connection;
     this.transport = connection.transport;
     this.requestTimeoutMs = requestTimeoutMs;

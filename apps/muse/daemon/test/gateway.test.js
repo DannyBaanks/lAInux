@@ -7,7 +7,7 @@ const { connectNoiseGateway } = require('../lib/gateway');
 const { NoiseRpcClient, queryPath } = require('../lib/rpc');
 const { NoiseXXResponder } = require('../lib/noise');
 const { NoiseFrameDecoder, chunkPayload } = require('../lib/transport');
-const { decodeServiceFrame, decodeServiceRequest, encodeServiceFrame, encodeServiceRequest } = require('../lib/proto');
+const { decodeServiceFrame, decodeServiceRequest, encodeServiceFrame, encodeServiceResponse } = require('../lib/proto');
 
 class FakeSocket {
   constructor() {
@@ -84,7 +84,7 @@ async function fakeGateway({ message2 = Buffer.from('attestation'), onRequest } 
           streamId: request.streamId,
           kind: { case: 'response', value: { status, headers: [], body, endBody: true } },
         });
-        for (const frame of chunkPayload(encodeServiceRequest({ service: 'daemon', payload: serviceFrame }))) {
+        for (const frame of chunkPayload(encodeServiceResponse({ payload: serviceFrame }))) {
           serverSocket.send(serverSend.encryptWithAd(EMPTY, frame));
         }
       };

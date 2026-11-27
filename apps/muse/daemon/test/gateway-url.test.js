@@ -20,6 +20,8 @@ test('primary gateway uses fixed shared ingress and exact query fields', () => {
 
 test('vm identity validates host, vm_id and vmName agreement', () => {
   assert.equal(vmIdFromGatewayUrl('https://vm-test/?vm_id=vm-test', 'vm-test'), 'vm-test');
+  assert.equal(vmIdFromGatewayUrl('wss://vm-test.metaaivm.com/', 'vm-test'), 'vm-test');
+  assert.throws(() => vmIdFromGatewayUrl('wss://other.metaaivm.com/', 'vm-test'), /does not match/);
   assert.throws(() => vmIdFromGatewayUrl('https://vm-test/?vm_id=other', 'vm-test'), /does not match/);
   assert.throws(() => vmIdFromGatewayUrl('https://vm-test/?other=1'), /unexpected query/);
   assert.throws(() => vmIdFromGatewayUrl('not a url'), /Invalid/);

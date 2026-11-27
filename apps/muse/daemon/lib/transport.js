@@ -5,7 +5,7 @@ const { EMPTY, concat } = require('./bytes');
 const {
   decodeNoiseFrame,
   decodeServiceFrame,
-  decodeServiceRequest,
+  decodeServiceResponse,
   encodeNoiseFrame,
   encodeServiceFrame,
   encodeServiceRequest,
@@ -179,7 +179,7 @@ class NoiseTransport {
       const plaintext = this.receiveCipher.decryptWithAd(EMPTY, encryptedFrame);
       const assembled = this.decoder.decode(plaintext);
       if (assembled === null) return null;
-      const envelope = decodeServiceRequest(assembled);
+      const envelope = decodeServiceResponse(assembled);
       if (envelope.payload.length === 0) throw new Error('empty ServiceResponse payload');
       const frame = decodeServiceFrame(envelope.payload);
       if (frame.kind.case === 'response') {
