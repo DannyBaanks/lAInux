@@ -1,10 +1,35 @@
 # lAInux
 
-> **AI apps, but make them Linux. A corpus of recipes that turn AI desktop apps with no Linux build into native Linux apps, on your own machine.**
+> **AI apps, but make them Linux. A corpus of recipes that turn AI desktop apps with no Linux build into native Linux apps, on your own machine. Headliner: ⭐ Muse, which can now use your Linux computer.**
 > *Zero proprietary redistribution · every input pinned by SHA-256 (fail closed) · your profile is never touched*
 
+## ⭐ Star of the corpus: Muse, Meta's AI assistant, now with a Linux computer
+
+Meta ships Muse for macOS only, as a native SwiftUI + Rust binary. It is not
+Electron, so the usual asar swap has nothing to work on. lAInux takes another
+route: a **clean-room Linux computer node** that speaks Muse's own device-link
+protocol. You chat with Muse as usual, and Muse **uses your Linux machine** to
+list, search, read and write files and run shell commands, with a native
+confirmation dialog before anything changes.
+
+- 🔐 **Native protocol, no emulation:** `Noise_XX_25519_AESGCM_SHA256` over WebSocket, streaming RPC, chunked framing, `client.register_capabilities` + `client.invoke`, written from scratch in Node 24.
+- 🖥️ **Shows up as a real device:** your machine appears in Muse → Settings → Devices as `<hostname> (Linux)`.
+- ✅ **Fail-closed approvals:** `files.write`, `files.mkdir` and `shell.exec` open a `zenity` dialog. **Rechazar** is the default button, and a timeout, a closed dialog or no display all mean no.
+- ♻️ **Always on:** a `systemd --user` service that reconnects by itself, plus a desktop shell with its own dock icon.
+- 🧾 **Verified live:** Muse listed a Linux folder, quoted a file word for word, created a folder, wrote a file and ran a shell command, each approved in the dialog; a rejected command came back as `permission_denied` and did nothing. Evidence: [`apps/muse/docs/evidence/`](apps/muse/docs/evidence/).
+
+```bash
+./transmute.sh muse install                 # desktop shell (icon from your own pinned Muse DMG)
+muse-desktop                                # sign in inside the window
+./apps/muse/daemon/install-service.sh       # Linux computer node as a user service
+```
+
+Full guide: [`apps/muse/README.md`](apps/muse/README.md) · protocol notes: [`apps/muse/docs/PROTOCOL.md`](apps/muse/docs/PROTOCOL.md)
+
+## The corpus
+
 Each app gets a recipe under `apps/<app>/`. A recipe takes the vendor's official
-Windows package, fetches everything else from its official source, verifies each
+Windows or macOS package, fetches everything else from its official source, verifies each
 input against a pinned SHA-256, and assembles a native Linux install under
 `~/.local/share/<app>-desktop`. This repository holds **only scripts, text
 patches and hashes**: no `.exe`, `.msix`, `.asar`, Electron runtime, icon or any
@@ -12,19 +37,21 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 
 | App | Upstream input (you supply / we fetch) | How it runs on Linux | Recipe |
 |---|---|---|---|
+| ⭐ **Muse (Meta)** | macOS `.dmg` (you supply it; used only as a pinned icon/RE reference) | Pinned Electron 43 shell for `muse.ai` + native Node 24 computer node (`muse-node`) with `zenity` approvals | [`apps/muse`](apps/muse/README.md) |
 | **Qwen Desktop** | NSIS `.exe` from `download.qwen.ai` | Linux Electron 35 + patched `app.asar`, MCP via host `bun`/`uv` | [`apps/qwen`](apps/qwen/transmute.sh) → `qwen-transmute.sh` |
 | **Manus Desktop** | Microsoft Store `.Msixbundle` (you supply it) | Linux Electron 43 + untouched `app.asar`; Windows-only companions re-hosted by [WINS](#wins-dependency) | [`apps/manus`](apps/manus/README.md) |
 
 ```bash
 ./transmute.sh list                 # apps in the corpus
 ./transmute.sh qwen --download      # same as ./qwen-transmute.sh --download
+./transmute.sh muse install         # Muse desktop shell; then apps/muse/daemon/install-service.sh
 ./transmute.sh manus ~/Downloads/ManusAI.Manus_2.1.1.0_neutral_~_vajzd2mq3s8wj.Msixbundle
 ./transmute.sh <app> --uninstall    # removes the install, keeps ~/.config/<App>
 ```
 
 ## ⚖️ Legal Disclaimer & Notice of Non-Affiliation
 
-1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen and Manus AI).
+1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Meta Platforms / Muse, Alibaba Group / Qwen and Manus AI).
 2. **Trademarks:** All product names, marks and images belong to their respective owners.
 3. **Zero Redistribution:** The repository contains only original automation scripts, text patches and checksums. Vendor files are obtained by the end user from the vendor's official channels and transformed locally on the user's own machine.
 4. **User Compliance:** Review and comply with each vendor's Terms of Service and license before downloading and running its client.
@@ -48,6 +75,7 @@ Manus ships Windows-only companions (its device operator is a Go `.exe` that tal
 python3 -m unittest discover -s tests -p 'test_*.py'   # MSIX extractor (synthetic packages)
 ./tests/test_manus_recipe.sh                           # Manus recipe, offline, throwaway HOME
 ./test_e2e.sh                                          # Qwen pipeline (downloads)
+(cd apps/muse/daemon && npm test)                       # Muse node: protocol, invokes, approvals (offline)
 ```
 
 ---
