@@ -1,0 +1,17 @@
+# Live acceptance 2026-11-27 ~14:58: Muse chat asked to files.list ~/Documents and files.read ~/Documents/muse-linux-proof.txt on DannyISyCo (Linux).
+# Muse replied in-chat with the file's exact text. Daemon log (event names only, MUSE_DEBUG_SUBSCRIPTION=1), routine stream events filtered:
+[muse-node] identity 722db9f7-c8d1-4aa9-8e04-8bf04e5cc814 (DannyISyCo (Linux))
+[muse-node] requesting standard VM credentials from the Muse shell…
+[muse-node] VM f2653693-1480-4310-bc3f-4ce61c77bd47; opening Noise_XX_25519_AESGCM_SHA256…
+[muse-node] handshake OK: type=standard rv=none
+[muse-node] event node.connected keys=event,payload,seq,ts_ms,type
+[muse-node] capabilities HTTP 200: {"accepted_data_sources":0,"accepted_device_commands":8,"accepted_hatch_app_commands":0,"capabilities":["video_file_ref_ingest","voice_user_speech_status","response_share_snapshot"],"rejected_ids":[]}
+[muse-node] online as DannyISyCo (Linux): {"node_id":"722db9f7-c8d1-4aa9-8e04-8bf04e5cc814","status":"registered"}
+[muse-node] commands: ping, system.which, files.list, files.search, files.read, files.write, files.mkdir, shell.exec
+[muse-node] event client.invoke keys=event,payload,ts_ms,type
+[muse-node] client.invoke files.list ebe46a6a-788e-4c1e-81cf-997f240b3795 payload_keys=command_id,invoke_id,params_json,timeout_ms
+[muse-node] invoke ebe46a6a-788e-4c1e-81cf-997f240b3795: ok=true HTTP 200
+[muse-node] event client.invoke keys=event,payload,ts_ms,type
+[muse-node] client.invoke files.read e52f52b8-ee6d-4d6a-b98e-b420eaa4c7e5 payload_keys=command_id,invoke_id,params_json,timeout_ms
+[muse-node] invoke e52f52b8-ee6d-4d6a-b98e-b420eaa4c7e5: ok=true HTTP 200
+[muse-node] event chat.seen keys=event,payload,seq,ts_ms,type

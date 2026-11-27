@@ -206,9 +206,24 @@ activity.*, identity/skills/spaces/theme/navigation subscriptions
   `node.register {node_id, display_name, platform, commands_v2:{<command>:{description,…}}}`
   The web client registers itself with only `ping`; the Mac app registers its
   local connector/computer-use command surface the same way.
-- **Invokes**: the gateway pushes `client.invoke {command_id, invoke_id, payload}`;
-  the node replies `nodes.invoke_result {invoke_id, ok, payload_json}` (acks via
-  `nodes.invoke_ack`, backfill via `nodes.sync`).
+- **Invokes (corrected, verified live 2026-11-27):** `node.register` alone makes
+  the node show as online but it never receives commands. The gateway sends
+  `client.invoke` only to a connection that declared its commands with
+  `client.register_capabilities` (`POST /client/register-capabilities`):
+  `{client_id, platform, display_name, version, capabilities:{data_sources:{},
+  device_commands:{<cmd>:{description, required:{arg:{type:<int>, description,
+  enum_values:[]}}, optional:{…}, permissions:[…], datatype, timeout_ms}},
+  hatch_app_commands:{}}}`. The response gives `accepted_device_commands` and
+  `rejected_ids`. Arg `type` is a number code: string=1 and integer=2 come from
+  the web client's own specs; the gateway also accepts 3–6 and rejects 99, and
+  the daemon assumes number=3, boolean=4, object=5, array=6, which is inferred,
+  not confirmed. Delivery is `{command_id, invoke_id, params_json, timeout_ms}`
+  on the `chat.subscribe` stream. The reply is `client.invoke.result`
+  (`/client/invoke-result`): `{invoke_id, ok:true, payload_json}` or
+  `{invoke_id, ok:false, error:{code, message}}`. `/nodes/invoke-ack` needs a
+  `request_id`, and `client.invoke` deliveries don't include one; sending the
+  ack without it got HTTP 400 and then the gateway closed the socket. Evidence:
+  `docs/evidence/2026-11-27-linux-node-invoke-acceptance.log`.
 - **Device approval**: `/api/nodes/device-approval`,
   `/api/nodes/recipient-approval`, `hatch_desktop:enable_device_approval_binding`,
   `device_approval_binding`; enrollment states `UNENROLLED/ENROLLING/ENROLLED`;
