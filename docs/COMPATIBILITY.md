@@ -1,6 +1,6 @@
 # Compatibility and evidence
 
-**Snapshot:** 2026-11-14 · **six recipes in the repository** · **not six claims of complete feature parity**.
+**Snapshot:** 2026-11-27 · **seven recipes in the repository** · **not seven claims of complete feature parity**.
 
 This is a public status ledger for the recipes in `apps/`. A committed recipe, an offline test, a rendered desktop window and a full interactive workflow answer **different questions**. Do not collapse them into one "works 100%" number.
 
@@ -8,6 +8,7 @@ This is a public status ledger for the recipes in `apps/`. A committed recipe, a
 
 | App | Linux strategy | What is documented or demonstrated | Known gaps / next gate | Primary evidence |
 |---|---|---|---|---|
+| **⭐ Muse (Meta)** | Hardened Linux Electron 43 shell (`muse.ai`) + clean-room Node 24 Linux computer node (`Noise_XX_25519_AESGCM_SHA256`, streaming RPC, protobuf chunking, `zenity` fail-closed approval, `systemd --user` service) | On 2026-11-27 live end-to-end tests passed from Muse chat on Linux: device registered under **Settings → Devices**, `system.which`, `files.list`, `files.search`, `files.read`, approved `files.mkdir`/`files.write`/`shell.exec`, and denied command returning `permission_denied`; native dock icon (`StartupWMClass=muse`) | Requires Node >= 24, `zenity`, and an active graphical session for `muse-node.service`; macOS SwiftUI-only native integrations (screen/accessibility) are not re-hosted | [Muse guide](../apps/muse/README.md), [protocol map](../apps/muse/docs/PROTOCOL.md), [acceptance log](../apps/muse/docs/evidence/2026-11-27-linux-node-invoke-acceptance.log) |
 | **Qwen Desktop** | Extract NSIS; patch platform gate and updater; Linux Electron 35 + native MCP tools | Linux startup, desktop integration, MCP runtime wiring are described in the reverse-engineering report | Verify current upstream release; automated AppImage packaging is not part of the published recipe; review Electron sandbox configuration | [Qwen report](REVERSE_ENGINEERING.md), [recipe](../apps/qwen/transmute.sh) |
 | **Manus Desktop** | Linux Electron 43 + native modules; WINS and Wine-assisted Windows companion bridges | Install and companion adaptation path documented; an offline recipe test exists | Full operator, browser and sign-in workflows need independent end-to-end evidence; requires WINS | [Manus guide](../apps/manus/README.md), [offline test](../tests/test_manus_recipe.sh) |
 | **Dola** | Vendor `biz.pak` UI on original lAInux Electron host | UI and network messages are documented; third-party browser login recorded with a real account in the app guide | Some native popup/`chrome://` views and associated controls are not yet implemented; chat input must be retested on affected setups | [Dola guide](../apps/dola/README.md), [recipe](../apps/dola/transmute.sh) |
@@ -36,6 +37,7 @@ This ledger summarizes evidence already documented in the repository. It is **no
 Suggested offline checks from the repository root:
 
 ```bash
+(cd apps/muse/daemon && npm test)
 python3 -m unittest discover -s tests -p 'test_*.py'
 ./tests/test_dola_recipe.sh
 ./tests/test_doubao_recipe.sh

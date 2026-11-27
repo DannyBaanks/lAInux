@@ -2,38 +2,58 @@
 
 **AI apps, but make them Linux.** 🐧
 
-Six reproducible recipes to adapt AI desktop applications that lack an official Linux build for the targeted package versions. lAInux works **locally, on your machine**, using vendor-provided inputs and auditable scripts—not repackaged proprietary applications.
+Seven reproducible recipes to adapt AI desktop applications that lack an official Linux build for the targeted package versions. lAInux works **locally, on your machine**, using vendor-provided inputs and auditable scripts—not repackaged proprietary applications.
 
-*En español: seis recetas para llevar clientes de IA a Linux sin redistribuir los binarios propietarios de sus fabricantes.*
+*En español: siete recetas para llevar clientes de IA a Linux sin redistribuir los binarios propietarios de sus fabricantes.*
 
-**The six-app milestone (2026-11-14):** Qwen · Manus · Dola · Gemini desktop · Doubao · Kimi.
+**The seven-app milestone (2026-11-27):** **⭐ Muse (Meta)** · Qwen · Manus · Dola · Gemini desktop · Doubao · Kimi.
 
-> **What the milestone means:** all six have recipes committed to this corpus. It does **not** mean every feature, account-login path or desktop integration has been validated. [See the evidence-based compatibility matrix](docs/COMPATIBILITY.md).
+> **What the milestone means:** all seven have recipes committed to this corpus. It does **not** mean every feature, account-login path or desktop integration has been validated. [See the evidence-based compatibility matrix](docs/COMPATIBILITY.md).
+
+## ⭐ Featured: Muse (Meta) — native Linux client & computer node
+
+Unlike the Electron apps in this corpus, Meta ships **Muse** (`com.meta.endo`) as a **macOS-native SwiftUI + Rust binary** — no Electron, no `app.asar`. lAInux brings it to Linux end to end without redistributing a single vendor byte:
+
+- **Desktop shell (`muse-desktop`)** — hardened pinned Electron 43.6.0 window running `muse.ai` with an isolated profile (`~/.config/muse-desktop`), native dock icon extracted locally from your SHA-256-pinned `Muse-14.1.dmg` (`StartupWMClass=muse`), and an authenticated local credential broker.
+- **Clean-room Linux computer node (`muse-node`)** — native Node 24 implementation of Muse's CVM device-link protocol (`Noise_XX_25519_AESGCM_SHA256` over WebSocket, streaming RPC, protobuf chunk framing, RV enrollment, and live `client.invoke` dispatch). Shows up as `<hostname> (Linux)` under **Settings → Devices**.
+- **8 native Linux commands** — `ping`, `system.which`, `files.list`, `files.search`, `files.read`, plus approval-gated `files.write`, `files.mkdir`, and `shell.exec`.
+- **Fail-closed native approvals (`zenity`)** — every write, mkdir, or shell command opens a native confirmation dialog with a bounded preview. **Rechazar** is the default button (an accidental Enter denies); timeout, window close, or missing display all return `permission_denied`.
+- **`systemd --user` service** — `./apps/muse/daemon/install-service.sh` runs `muse-node.service` with your graphical session (`--uninstall` removes it cleanly).
+
+```bash
+./transmute.sh muse install                  # pinned Electron shell + DMG icon
+muse-desktop                                 # sign in inside the window
+./apps/muse/daemon/install-service.sh        # enable Linux computer node (Node >= 24 + zenity)
+```
+
+Read the full guide and protocol evidence in [`apps/muse/README.md`](apps/muse/README.md) and [`apps/muse/docs/PROTOCOL.md`](apps/muse/docs/PROTOCOL.md).
 
 ### Explore the project
 
+- [**⭐ Muse (Meta) Linux client & node**](apps/muse/README.md) — flagship clean-room protocol node, `zenity` approvals and `systemd --user` service.
 - [**Compatibility & evidence**](docs/COMPATIBILITY.md) — feature-level status, known gaps and reproducible gates.
 - [**Architecture**](docs/ARCHITECTURE.md) — what the transmutation pipeline actually does, including WINS/Wine boundaries.
-- [**Contributing a recipe**](docs/CONTRIBUTING.md) — add a sixth app without weakening verification or user safety.
+- [**Contributing a recipe**](docs/CONTRIBUTING.md) — add an app without weakening verification or user safety.
 - [**Qwen reverse-engineering report**](docs/REVERSE_ENGINEERING.md) — the experiment that started the corpus.
 
 ### Why lAInux exists
 
-A Windows-only installer does not always imply Windows-only application logic. Some apps mainly need a matching Linux Electron runtime and a platform patch; others require a carefully reconstructed native host or companion bridges. **Each app gets its own recipe** instead of pretending that one transformation works for everything.
+A Windows- or macOS-only installer does not always imply OS-locked application logic. Some apps mainly need a matching Linux Electron runtime and a platform patch; others require a reconstructed native host, companion bridges, or—as with **Muse**—a clean-room Linux implementation of the device-link protocol. **Each app gets its own recipe** instead of pretending that one transformation works for everything.
 
 **Ground rules:** no vendor-owned binaries in Git; pin and verify upstream inputs; fail closed on unexpected changes; stage installs with rollback; preserve the user's profile. A Linux-native window is not necessarily sandboxed or fully feature-compatible.
 
-## The six recipes
+## The seven recipes
 
 Each app gets a recipe under `apps/<app>/`. A recipe takes the vendor's official
-Windows package, fetches everything else from its official source, verifies each
+package (Windows or macOS), fetches everything else from its official source, verifies each
 input against a pinned SHA-256, and assembles a native Linux install under
 `~/.local/share/<app>-desktop`. This repository holds **only scripts, text
-patches and hashes**: no `.exe`, `.msix`, `.asar`, Electron runtime, icon or any
+patches and hashes**: no `.exe`, `.dmg`, `.msix`, `.asar`, Electron runtime, icon or any
 other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 
 | App | Upstream input (you supply / we fetch) | How it runs on Linux | Recipe |
 |---|---|---|---|
+| **⭐ Muse (Meta)** | Official macOS `Muse-14.1.dmg` (you supply it, SHA-256 pinned for icon + RE) | Hardened Linux Electron 43 shell (`muse.ai`) + clean-room Node 24 Linux computer node (`Noise_XX_25519_AESGCM_SHA256`), `zenity` fail-closed approvals & `systemd --user` service | [`apps/muse`](apps/muse/README.md) |
 | **Qwen Desktop** | NSIS `.exe` from `download.qwen.ai` | Linux Electron 35 + patched `app.asar`, MCP via host `bun`/`uv` | [`apps/qwen`](apps/qwen/transmute.sh) → `qwen-transmute.sh` |
 | **Manus Desktop** | Microsoft Store `.Msixbundle` (you supply it) | Linux Electron 43 + untouched `app.asar`; Windows-only companions re-hosted by [WINS](#wins-dependency) | [`apps/manus`](apps/manus/README.md) |
 | **Dola** (intl. Doubao) | `biz.pak` from your Dola install (folder, the `.pak`, or an AppImage that bundles it) | Dola's own UI on Linux Electron 45 + the lAInux host (original code); third-party sign-in in your default browser | [`apps/dola`](apps/dola/README.md) |
@@ -41,12 +61,13 @@ other vendor byte is ever committed (`tests/test_manus_recipe.sh` checks it).
 | **Gemini desktop** | Google's package from `dl.google.com` (we fetch it, pinned to the hash Google's update server publishes) | Linux Electron 44 + untouched `app.asar`; Google sign-in inside the app | [`apps/gemini`](apps/gemini/README.md) |
 | **Kimi + Kimi Work** | Moonshot's installer from its CDN (we fetch it, pinned to the MD5 its CDN serves + our SHA-256) | Linux Electron 43 + untouched `app.asar`; Kimi Work's local agent (daimon) on Linux CPython/uv with Kimi's Electron as Node; Google sign-in in your default browser | [`apps/kimi`](apps/kimi/README.md) |
 
-The matrix above describes the **adaptation strategy**, not an unconditional full-support claim. For known limitations—including Qwen's sandbox configuration, Manus's hybrid companion path, Dola's desktop popups, Gemini's Windows-only helpers, Doubao's unverified interactive login and Kimi Claw (not on Linux yet)—read [Compatibility & evidence](docs/COMPATIBILITY.md).
+The matrix above describes the **adaptation strategy**, not an unconditional full-support claim. For known limitations—including Muse's `Node >= 24` / `zenity` node requirements, Qwen's sandbox configuration, Manus's hybrid companion path, Dola's desktop popups, Gemini's Windows-only helpers, Doubao's unverified interactive login and Kimi Claw (not on Linux yet)—read [Compatibility & evidence](docs/COMPATIBILITY.md).
 
 ## Quick start
 
 ```bash
 ./transmute.sh list                 # apps in the corpus
+./transmute.sh muse install         # Muse (Meta): shell + DMG icon, then ./apps/muse/daemon/install-service.sh
 ./transmute.sh qwen --download      # same as ./qwen-transmute.sh --download
 ./transmute.sh manus ~/Downloads/ManusAI.Manus_2.1.1.0_neutral_~_vajzd2mq3s8wj.Msixbundle
 ./transmute.sh dola ~/Applications/Dola-Wine-1.0.0-x86_64.AppImage   # or your Dola folder / its biz.pak
@@ -58,7 +79,7 @@ The matrix above describes the **adaptation strategy**, not an unconditional ful
 
 ## ⚖️ Legal Disclaimer & Notice of Non-Affiliation
 
-1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Alibaba Group / Qwen, Manus AI, ByteDance / Dola and Doubao and Google / Gemini and Moonshot AI / Kimi).
+1. **Non-Affiliation:** This is an independent interoperability project by **ISyCo Labs**. It is **NOT** affiliated with, endorsed by or sponsored by any vendor whose application it supports (including Meta / Muse, Alibaba Group / Qwen, Manus AI, ByteDance / Dola and Doubao, Google / Gemini, and Moonshot AI / Kimi).
 2. **Trademarks:** All product names, marks and images belong to their respective owners.
 3. **Zero Redistribution:** The repository contains only original automation scripts, text patches and checksums. Vendor files are obtained by the end user from the vendor's official channels and transformed locally on the user's own machine.
 4. **User Compliance:** Review and comply with each vendor's Terms of Service and license before downloading and running its client.
@@ -79,6 +100,7 @@ Manus ships Windows-only companions (its device operator is a Go `.exe` that tal
 ## 🧪 Tests
 
 ```bash
+(cd apps/muse/daemon && npm test)                      # Muse Linux node (Noise XX, RPC, commands, zenity approval)
 python3 -m unittest discover -s tests -p 'test_*.py'   # MSIX extractor (synthetic packages)
 ./tests/test_manus_recipe.sh                           # Manus recipe, offline, throwaway HOME
 ./test_e2e.sh                                          # Qwen pipeline (downloads)
