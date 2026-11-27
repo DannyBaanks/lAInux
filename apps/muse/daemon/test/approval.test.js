@@ -23,6 +23,7 @@ test('zenity OK approves, cancel and timeout deny', async () => {
     assert.equal(await approve({ command_id: 'shell.exec', params: { command: 'echo hi' } }), expected);
     assert.equal(calls[0].command, 'zenity');
     assert.ok(calls[0].args.includes('--no-markup'));
+    assert.ok(calls[0].args.includes('--default-cancel'));
     assert.ok(calls[0].args.some((arg) => arg.includes('echo hi')));
   }
 });

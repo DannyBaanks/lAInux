@@ -54,7 +54,8 @@ function createZenityApprover({ timeoutMs = 110000, spawnImpl = spawn, env = pro
       let child;
       try {
         child = spawnImpl('zenity', [
-          '--question', '--no-markup', '--width=520',
+          // --default-cancel: a stray Enter/Space must deny, never approve.
+          '--question', '--no-markup', '--default-cancel', '--width=520',
           `--title=${title}`, `--text=${title}\n\n${body}`,
           '--ok-label=Permitir', '--cancel-label=Rechazar',
           `--timeout=${Math.ceil(timeoutMs / 1000)}`,
