@@ -18,11 +18,17 @@ const { MuseNodeService } = require('../lib/node-service');
 const { createZenityChannel } = require('../lib/approval');
 const { createApprovalBroker } = require('../lib/approval-broker');
 const { FlowMode, parseMinutes } = require('../lib/flow');
+const { TurnApproval } = require('../lib/turn-approval');
+const { UndoLog } = require('../lib/undo-log');
 const telegram = require('../lib/telegram');
 const keyring = require('../lib/keyring');
 
 const TELEGRAM_ACCOUNT = 'telegram-bot-token';
 function flowFile() { return path.join(defaultStateDirectory(), 'flow.json'); }
+// "Approve everything for this turn" state and the undo log live next to
+// flow.json, inside the protected authority directory.
+function turnFile() { return path.join(defaultStateDirectory(), 'turn.json'); }
+function undoDirectory() { return path.join(defaultStateDirectory(), 'undo'); }
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
 
 async function openGateway(profile, { cold = false } = {}) {
@@ -180,6 +186,8 @@ async function start(profile, options = {}) {
   const authority = new WorkspaceAuthority();
   const receipts = new ReceiptLog({ file: receiptsFile() });
   const flow = new FlowMode({ file: flowFile() });
+  const turn = new TurnApproval({ file: turnFile() });
+  const undoLog = new UndoLog({ directory: undoDirectory() });
   // Approval channels the model cannot reach: the desktop dialog and, when
   // paired, the private Telegram chat. First explicit answer wins.
   const channels = [createZenityChannel()];
@@ -190,6 +198,23 @@ async function start(profile, options = {}) {
     const target = ask.command_id === 'shell.exec' ? `$ ${String(ask.params?.command ?? '').slice(0, 300)}` : ask.target;
     console.log(`[muse-node] flow: ${ask.command_id} approved by Flow mode`);
     phone?.notify(`⚡ Flow: ${ask.command_id}\n${target}`);
+  };
+  // Called by the gate after an action passed thanks to the turn.
+  // enabled=true: the operator just tapped "Aprobar todo este turno" on
+  // this request, so the mode is switched on from here (operator decision,
+  // desktop channel). enabled=false: an already active turn covered it.
+  const onTurn = (ask) => {
+    const target = ask.command_id === 'shell.exec' ? `$ ${String(ask.params?.command ?? '').slice(0, 300)}` : ask.target;
+    if (ask.enabled) {
+      try {
+        const state = turn.enable('desktop');
+        console.log(`[muse-node] turn: approved on ${ask.command_id} until ${state.until}`);
+        phone?.notify(`🟢 Turno aprobado desde el escritorio hasta ${state.until.slice(11, 16)} UTC\n${ask.command_id}\n${target}\nFuera de carpetas autorizadas sigue preguntando. Apagar: muse-node turn off`);
+      } catch (error) { console.error(`[muse-node] turn: ${error.message}`); }
+      return;
+    }
+    console.log(`[muse-node] turn: ${ask.command_id} approved by the active turn`);
+    phone?.notify(`🔁 Turno: ${ask.command_id}\n${target}`);
   };
   let stopping = false;
   let wake = null;
@@ -208,7 +233,7 @@ async function start(profile, options = {}) {
     try {
       session = await openGateway(profile, options);
       const { identity, connection, rpc } = session;
-      const registry = createCommandRegistry({ approve, authority, receipts, flow, onFlow });
+      const registry = createCommandRegistry({ approve, authority, receipts, flow, onFlow, turn, onTurn, undoLog });
       const service = new MuseNodeService({ rpc, identity, registry, ledger, status });
       session.service = service;
       const ended = new Promise((resolve) => {
@@ -361,7 +386,56 @@ function authorityCommand(command, args) {
     const count = Number(args.find((value) => /^\d+$/.test(value)) ?? 20);
     try { process.stdout.write(fs.readFileSync(receiptsFile(), 'utf8').trimEnd().split('\n').slice(-count).join('\n') + '\n'); }
     catch (error) { if (error.code === 'ENOENT') console.log('no receipts yet'); else throw error; }
+  } else if (command === 'turn') {
+    turnCommand(args[0], args.slice(1));
+  } else if (command === 'undo') {
+    undoCommand(args[0], args.slice(1));
   }
+}
+
+function turnCommand(sub, args) {
+  const turn = new TurnApproval({ file: turnFile() });
+  if (sub === 'on') {
+    const raw = args.find((arg) => /^\d+(m|min)?$/.test(arg)) ?? '10';
+    const minutes = Number(raw.replace(/(m|min)$/, ''));
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 30) throw new Error('usage: muse-node turn on [1..30 minutos, por defecto 10]');
+    const state = turn.enable('terminal', { windowMs: minutes * 60000 });
+    console.log(`Turno ON hasta ${state.until}: dentro de las carpetas ya autorizadas (muse-node policy) Muse no vuelve a preguntar; cada acción renueva la ventana. Fuera de grants, credenciales y rutas de autoridad siguen igual. Apagar: muse-node turn off`);
+  } else if (sub === 'off') {
+    turn.disable();
+    console.log('Turno OFF: vuelvo a pedir permiso petición por petición.');
+  } else if (!sub || sub === 'status') {
+    const state = turn.status();
+    console.log(state.active ? JSON.stringify({ ...state, remaining_min: Math.round(state.remainingMs / 60000) }) : JSON.stringify(state));
+  } else {
+    throw new Error('usage: muse-node turn on [10|10m] | off | status');
+  }
+}
+
+function describeUndo(entry) {
+  const when = entry.at.slice(0, 19).replace('T', ' ');
+  const action = entry.action_id === 'workspace.command.run' ? 'shell.exec' : 'files.*';
+  const plan = entry.undo?.op ?? null;
+  const how = { remove_created: 'eliminar (lo creó Muse)', remove_folder_if_empty: 'eliminar si está vacía', restore_copy: 'restaurar contenido previo' }[plan] ?? (entry.reversible ? '' : 'no reversible');
+  return `${String(entry.seq).padStart(4)}  ${when}  ${entry.approval ?? '-'}  ${action}  ${entry.target ?? ''}  ${how}`;
+}
+
+function undoCommand(sub, args) {
+  const log = new UndoLog({ directory: undoDirectory() });
+  if (!sub || sub === 'list') {
+    const rows = log.undoable();
+    if (!rows.length) { console.log('Nada que deshacer (todavía no hay acciones reversibles sin deshacer).'); return; }
+    console.log('  seq  momento                 aprobado  acción  objetivo  cómo se deshace');
+    for (const row of rows) console.log(describeUndo(row));
+    console.log(`\nDeshacer: muse-node undo <seq> [--dry-run]   (shell.exec nunca se deshace solo)`);
+    return;
+  }
+  if (!/^\d+$/.test(sub)) throw new Error('usage: muse-node undo list | <seq> [--dry-run]');
+  const dryRun = args.includes('--dry-run');
+  const entry = log.entries().find((item) => item.kind === 'DONE' && item.seq === Number(sub));
+  if (entry && dryRun) { console.log(`DRY RUN seq ${entry.seq}: ${JSON.stringify(log.undo(sub, { dryRun: true }).plan)}  (no se tocó nada)`); return; }
+  const result = log.undo(Number(sub));
+  console.log(`Deshecho seq ${result.seq_undone}: ${JSON.stringify(result.plan)}`);
 }
 
 function printStatus() {
@@ -385,7 +459,7 @@ async function main() {
   if (command === 'status') return printStatus();
   if (command === 'telegram') return telegramCommand(process.argv[3], process.argv.slice(4));
   if (command === 'flow') return flowCommand(process.argv[3], process.argv.slice(4));
-  if (['policy', 'grant', 'revoke', 'lock', 'unlock', 'receipts'].includes(command)) return authorityCommand(command, process.argv.slice(3));
+  if (['policy', 'grant', 'revoke', 'lock', 'unlock', 'receipts', 'turn', 'undo'].includes(command)) return authorityCommand(command, process.argv.slice(3));
   const options = { cold: process.argv.includes('--cold'), stayMs: stayMs() };
   if (command === 'probe') return probe(profile, options);
   if (command === 'register') return register(profile, options);

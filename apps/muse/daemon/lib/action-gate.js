@@ -12,6 +12,14 @@
 //   3. IsySentinel aggregates Authority + checks: ALLOW or DENY.
 //   4. Receipts: DENY, or EXECUTE now and RETURN after the owner acted.
 //
+// Turn approval ("Aprobar todo este turno") is wired exactly like Flow:
+// when the operator approved the turn and this request sits inside a folder
+// that is already granted (turn-approval.covers runs the same authority
+// evaluation and only accepts "fresh request-bound approval is required"),
+// the gate supplies the missing consent without a dialog. The dialog offers
+// the turn button only when the turn could cover the request; a request
+// outside every grant never sees it.
+//
 // The model requests; the gate decides; the owner executes; the operator
 // keeps authority. Nothing here can create or widen a grant.
 
@@ -28,18 +36,22 @@ const CONSENT_REASONS = new Set([
 const FLOW_REASON = 'fresh request-bound approval is required';
 
 // approve() may answer a boolean (single channel) or the Approval Broker's
-// { approved, channel }.
+// { approved, channel, scope }. scope 'turn' means the operator tapped
+// "Aprobar todo este turno" for this request: this one is approved now,
+// and the gate turns the mode on (onTurn.enabled) for the rest.
 function normalizeAnswer(answer) {
-  if (answer === true) return { approved: true, channel: null };
-  if (answer && typeof answer === 'object' && answer.approved === true) return { approved: true, channel: typeof answer.channel === 'string' ? answer.channel : null };
-  return { approved: false, channel: null };
+  if (answer === true) return { approved: true, channel: null, scope: 'once' };
+  if (answer && typeof answer === 'object' && answer.approved === true) return { approved: true, channel: typeof answer.channel === 'string' ? answer.channel : null, scope: answer.scope === 'turn' ? 'turn' : 'once' };
+  return { approved: false, channel: null, scope: 'once' };
 }
 
 class ActionGate {
-  constructor({ authority, approve = async () => false, approvals = new ActionApprovalStore(), receipts = null, owners, home, flow = null, onFlow = null, logger = console }) {
+  constructor({ authority, approve = async () => false, approvals = new ActionApprovalStore(), receipts = null, owners, home, flow = null, onFlow = null, turn = null, onTurn = null, logger = console }) {
     this.authority = authority;
     this.flow = flow;
     this.onFlow = onFlow;
+    this.turn = turn;
+    this.onTurn = onTurn;
     this.approve = approve;
     this.approvals = approvals;
     this.receipts = receipts;
@@ -55,6 +67,22 @@ class ActionGate {
 
   flowCovers(request) {
     try { return Boolean(this.flow?.covers(request.actionId)); } catch { return false; }
+  }
+
+  // True when an ACTIVE turn covers this exact request (granted folder,
+  // only consent missing). Never widens a grant.
+  turnCovers(request) {
+    try { return Boolean(this.turn?.covers(request, this.authority)); } catch { return false; }
+  }
+
+  // The dialog offers "Aprobar todo este turno" only when the turn could
+  // cover this request once approved, and no turn is active right now.
+  turnOffered(request) {
+    if (!this.turn) return false;
+    let active = true;
+    try { active = this.turn.status().active; } catch { active = true; }
+    if (active) return false;
+    try { return Boolean(this.turn.wouldCover(request, this.authority)); } catch { return false; }
   }
 
   describeTarget(request) {
@@ -83,11 +111,16 @@ class ActionGate {
       const precheck = this.sentinel.evaluate(request, new AuthorityDecision(true, 'precheck', 'precheck', request.digest));
       if (precheck.allowed) {
         const ask = { command_id: commandId, params, action_id: request.actionId, target: request.target, digest: request.digest };
-        let answer = { approved: false, channel: null };
+        let answer = { approved: false, channel: null, scope: 'once' };
         if (decision.reason === FLOW_REASON && this.flowCovers(request)) {
           // Flow answers only "granted here, but ask first"; never a missing grant.
-          answer = { approved: true, channel: 'flow' };
+          answer = { approved: true, channel: 'flow', scope: 'once' };
+        } else if (decision.reason === FLOW_REASON && this.turnCovers(request)) {
+          // Active turn: the operator already said yes for this burst.
+          answer = { approved: true, channel: 'turn', scope: 'once' };
+          try { this.turn.touch(); } catch {}
         } else {
+          ask.turnOffered = this.turnOffered(request);
           try {
             answer = normalizeAnswer(await this.approve(ask));
           } catch (error) {
@@ -98,8 +131,10 @@ class ActionGate {
           const flowed = answer.channel === 'flow';
           const token = this.approvals.issue(request, { ttlMs: 60000, mode: flowed ? 'delegated' : 'user' });
           decision = this.authority.evaluate(request, { approvals: this.approvals, approval: token });
-          approval = flowed ? 'flow' : answer.channel ? `user:${answer.channel}` : 'user';
+          approval = flowed ? 'flow' : answer.channel === 'turn' ? 'turn' : answer.channel ? `user:${answer.channel}` : 'user';
           if (flowed && decision.allowed) { try { this.onFlow?.(ask); } catch {} }
+          if (answer.channel === 'turn' && decision.allowed) { try { this.onTurn?.({ ...ask, enabled: false }); } catch {} }
+          if (answer.scope === 'turn' && decision.allowed) { try { this.onTurn?.({ ...ask, enabled: true }); } catch {} }
         } else {
           decision = new AuthorityDecision(false, '', 'the user did not approve this action', request.digest);
         }

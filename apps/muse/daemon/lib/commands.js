@@ -356,7 +356,7 @@ function shellExec(params, { graceMs = KILL_GRACE_MS } = {}) {
 
 function createCommandRegistry({
   approve = async () => false, authority = new WorkspaceAuthority(), approvals = new ActionApprovalStore(),
-  receipts = null, flow = null, onFlow = null, logger = console,
+  receipts = null, flow = null, onFlow = null, turn = null, onTurn = null, undoLog = null, logger = console,
 } = {}) {
   const definitions = {
     ping: schema('Connection liveness check'),
@@ -410,7 +410,22 @@ function createCommandRegistry({
     }),
   };
   const home = os.homedir();
-  const gate = new ActionGate({ authority, approve, approvals, receipts, owners: OWNERS, home, flow, onFlow, logger });
+  const gate = new ActionGate({ authority, approve, approvals, receipts, owners: OWNERS, home, flow, onFlow, turn, onTurn, logger });
+  // Undo log: snapshot of the target BEFORE the owner acts, and a DONE mark
+  // after. Only the three commands with an effect are logged; a failure to
+  // log must never block or alter the effect itself (the receipts still
+  // prove what happened), so every call is best-effort.
+  const EFFECTS = new Set(['files.write', 'files.mkdir', 'shell.exec']);
+  const undoRecord = (request, meta) => {
+    if (!undoLog || !EFFECTS.has(meta.commandId)) return null;
+    try { return undoLog.record(request, { approval: meta.approval, invokeId: meta.invokeId }); }
+    catch (error) { logger.error(`[muse-node] undo log: ${error.message}`); return null; }
+  };
+  const undoDone = (request) => {
+    if (!undoLog || !request?.digest) return null;
+    try { return undoLog.done(request.digest, { ok: true }); }
+    catch (error) { logger.error(`[muse-node] undo log: ${error.message}`); return null; }
+  };
   const commands = {
     ping: { build: () => ({ actionId: 'node.ping' }), run: async () => ({ ok: true, platform: 'linux', hostname: os.hostname(), timestamp: new Date().toISOString() }) },
     'system.which': {
@@ -484,8 +499,10 @@ function createCommandRegistry({
         return { ok: false, error_code: 'permission_denied', message };
       }
       let result;
+      const logged = EFFECTS.has(commandId) ? undoRecord(request, { approval: decision.approval, invokeId, commandId }) : null;
       try { result = await command.run(request, params); }
       catch (error) { result = { ok: false, error_code: error.code ?? 'command_failed', message: error.message }; }
+      if (logged && result?.ok === true) undoDone(request);
       gate.returned(request, { invokeId, result });
       return result;
     },
