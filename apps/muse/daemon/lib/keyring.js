@@ -14,7 +14,7 @@ const SCRIPT = {
 };
 
 function run(kind, account, input) {
-  const result = spawnSync('python3', ['-I', '-c', SCRIPT[kind], SERVICE, account], {
+  const result = spawnSync('python3', ['-E', '-P', '-c', SCRIPT[kind], SERVICE, account], {
     input, encoding: 'utf8', timeout: 20000, stdio: ['pipe', 'pipe', 'pipe'],
   });
   if (result.error || result.status !== 0) {
