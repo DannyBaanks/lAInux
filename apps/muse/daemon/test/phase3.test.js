@@ -338,7 +338,7 @@ test('telegram: answered on the desktop -> the phone message says so; old taps a
 
 test('telegram: token never appears in errors; secrets are masked before export', async () => {
   const transport = new TelegramTransport({ token: () => TOKEN, fetchImpl: async () => { throw new Error(`connect failed https://api.telegram.org/bot${TOKEN}/getMe`); } });
-  await assert.rejects(transport.getMe(), (error) => error.code === 'transport_failure' && !String(error.message).includes(TOKEN) && !error.cause);
+  await assert.rejects(transport.getMe(), (error) => error.code.startsWith('transport_failure') && !String(error.message).includes(TOKEN) && !error.cause);
   const bad = new TelegramTransport({ token: () => 'not-a-token', fetchImpl: async () => assert.fail('must not call') });
   await assert.rejects(bad.getMe(), { code: 'credential_unavailable' });
   await assert.rejects(transport.call('deleteWebhook'), { code: 'method_not_allowed' });

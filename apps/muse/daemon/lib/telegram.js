@@ -54,8 +54,10 @@ class TelegramTransport {
       text = await response.text();
     } catch (error) {
       if (error instanceof TelegramError) throw error;
-      // Never surface the original error: its message or cause can carry the URL.
-      throw new TelegramError(signal?.aborted ? 'aborted' : 'transport_failure');
+      // Never surface the original error: its message or cause can carry the
+      // URL. Only a bare error code (e.g. ECONNRESET) is kept, for diagnosis.
+      const detail = [error?.cause?.code, error?.code, error?.name].find((value) => typeof value === 'string' && /^[A-Za-z_]{2,40}$/.test(value));
+      throw new TelegramError(signal?.aborted ? 'aborted' : `transport_failure${detail ? ` (${method}: ${detail})` : ` (${method})`}`);
     }
     if (Buffer.byteLength(text) > MAX_RESPONSE) throw new TelegramError('response_too_large');
     let body;
@@ -67,7 +69,7 @@ class TelegramTransport {
     }
     if (code === 409) throw new TelegramError('polling_conflict');
     if (response.status !== 200 || body?.ok !== true || !('result' in body)) {
-      throw new TelegramError(response.status >= 400 && response.status < 500 ? 'telegram_rejected' : 'transport_failure');
+      throw new TelegramError(response.status >= 400 && response.status < 500 ? `telegram_rejected (${method}: HTTP ${response.status})` : `transport_failure (${method}: HTTP ${response.status})`);
     }
     return body.result;
   }
