@@ -1,0 +1,172 @@
+# Guía del operador: muse-node + ISySentinel
+
+`muse-node` deja que Muse (desde la PC o desde el celular) use tu computadora
+Linux. Nada pasa sin tu autoridad: **Muse pide → ISySentinel decide → el
+daemon ejecuta → tú conservas el control.** Es el mismo contrato que ISyCode
+(Workspace Authority + IsySentinel + aprobaciones de un solo uso).
+
+## Cómo decide
+
+| Situación | Qué pasa |
+|---|---|
+| Leer/listar/buscar en una carpeta que **tú permitiste** | Se hace sin preguntar |
+| Leer fuera de tus carpetas permitidas | Te sale un diálogo; un "Permitir" vale **solo para esa petición** |
+| Escribir, crear carpetas, ejecutar comandos | **Siempre** pregunta, aunque la carpeta esté permitida |
+| Llaves y credenciales (`~/.ssh`, `~/.gnupg`, `~/.aws`, keyrings, sesiones de navegador, credenciales de Muse/gh/Claude…) | **Negado siempre**, aunque digas que sí, también a través de symlinks |
+| Fuera de tu `$HOME` | Negado sin preguntar |
+| Algo que revocaste | Negado sin preguntar |
+| Nodo bloqueado (`lock`) | Todo negado excepto `ping` |
+
+El diálogo **no te quita el teclado**: aparece sin robar el foco (sigues
+escribiendo donde estabas) y **solo responde al clic del mouse**; Enter,
+Escape o una tecla que se te escape no aprueban ni cancelan nada. Cerrar la
+ventana con la X o dejar pasar 110 s = rechazo. Cada diálogo muestra la
+*huella* de la petición: tu "sí" vale para esa petición exacta (mismos
+argumentos, mismo archivo). Si el archivo cambia entre tu "sí" y la
+escritura, se cancela y Muse tiene que volver a pedirlo.
+
+Cuando la petición está dentro de una carpeta que ya autorizaste para
+escribir o ejecutar (`grant write` / `grant shell`), el diálogo trae un
+tercer botón: **Aprobar todo este turno** (ver sección abajo).
+
+## Comandos
+
+```bash
+M="$HOME/Development/ISyCo Git/lAInux.muse/apps/muse/daemon/bin/muse-node"
+
+"$M" status                       # estado del nodo: READY / DEGRADED / RECONNECTING…
+"$M" policy                       # qué permisos tienes dados
+"$M" grant read ~/Documents       # leer/listar/buscar ahí sin preguntar
+"$M" grant read ~/Development     # puedes dar varias carpetas
+"$M" grant which                  # system.which sin preguntar
+"$M" revoke read                  # quita el permiso (efecto inmediato)
+"$M" lock                         # BOTÓN DE PÁNICO: niega todo menos ping
+"$M" unlock
+"$M" receipts 20                  # últimas 20 decisiones (DENY / EXECUTE / RETURN)
+"$M" receipts --verify            # comprueba que nadie editó el historial
+"$M" turn status                  # ¿hay un turno aprobado? hasta cuándo, cuántas acciones
+"$M" turn on 10                   # aprueba el turno desde la terminal (1..30 min)
+"$M" turn off                     # apaga el turno ya
+"$M" undo list                    # acciones que puedes deshacer, la más reciente primero
+"$M" undo 17 --dry-run            # qué haría el undo de la acción 17, sin tocar nada
+"$M" undo 17                      # deshazla (solo archivos y carpetas)
+```
+
+`grant write` y `grant shell` existen, pero **no** quitan la pregunta: solo
+limitan en qué carpetas se puede pedir.
+
+## Dónde vive cada cosa
+
+| Qué | Dónde |
+|---|---|
+| Permisos (solo tú los cambias) | `~/.local/state/lainux-mods/workspace-authority/grants-*.json` (0600) |
+| Recibos encadenados por hash | `~/.local/state/lainux-mods/receipts/muse-node.jsonl` |
+| Turno aprobado ("Aprobar todo este turno") | `~/.local/state/lainux-mods/turn.json` |
+| Log de undo + copias anteriores | `~/.local/state/lainux-mods/undo/undo.jsonl`, `…/undo/undo/*.before` |
+| Estado de conexión | `~/.local/state/muse-node/status.json` |
+| Log del servicio | `journalctl --user -u muse-node.service -f` |
+
+Muse no puede leer ni escribir estas rutas: están protegidas para que ningún
+modelo pueda darse permisos a sí mismo. Los recibos guardan la ruta, la
+decisión y un hash del resultado; **no** guardan el contenido de archivos ni
+la salida de comandos (los comandos van como hash + vista previa recortada).
+El **log de undo** sí guarda una copia del contenido anterior de cada archivo
+que Muse sobrescribe (hasta 8 MB; más grande = solo el hash, y se avisa de que
+no se puede deshacer), para que `muse-node undo` pueda devolverlo.
+
+## Aprobar desde el celular (Telegram)
+
+Las aprobaciones llegan **a la vez** al diálogo de la PC y a tu chat privado
+con tu bot de Telegram; vale la primera respuesta (un «Rechazar» es tan
+definitivo como un «Permitir»). Sin respuesta en 110 s = rechazado.
+
+Vincular (una vez, en tu terminal):
+
+1. En Telegram, abre **@BotFather**, envía `/newbot` y copia el token.
+2. `muse-node telegram pair` → pega el token (no se ve; va al keyring, no a
+   un archivo) → envía al bot el `/pair <pin>` que te muestra → confirma que
+   es tu cuenta.
+3. `systemctl --user restart muse-node.service`
+
+Probar sin ejecutar nada: para el daemon y corre `muse-node telegram test`.
+Otros: `muse-node telegram status` · `muse-node telegram unpair`.
+
+Por qué no por el chat de Muse ni WhatsApp: esos mensajes los lee el modelo,
+y lo que el modelo diga no puede contar como tu permiso. El bot solo hace
+caso a tu usuario en tu chat privado; cada botón vale una sola vez, para esa
+petición exacta (su huella) y caduca. Telegram ve la vista previa de la
+petición; los textos con pinta de secreto se ocultan antes de enviarla.
+
+En el chat del bot:
+
+| Mensaje | Qué hace |
+|---|---|
+| `/estado` | En línea, bloqueo, Flow y peticiones pendientes |
+| `/flow 30` · `/flow 2h` | Flow de escritura por ese tiempo |
+| `/flow 30 terminal` | Flow que también cubre comandos (ver aviso) |
+| `/flow off` | Volver a pedir permiso |
+| `/bloquear` | Pánico: todo se niega salvo ping. **Desbloquear solo en la PC** (`muse-node unlock`) |
+
+## Modo Flow (no pedir permiso un rato)
+
+`muse-node flow on 30m` (o `2h`, máx. 8 h) · `muse-node flow off` ·
+`muse-node flow status` · o el botón **⚡ Permitir + Flow 30 min**.
+
+- Solo se salta la pregunta **dentro de carpetas ya autorizadas**:
+  `muse-node grant write ~/Documents` (y `grant shell <carpeta>` para comandos).
+  Fuera de ellas sigue preguntando; `~/.ssh`, credenciales y el estado de
+  muse-node siguen negados siempre.
+- Por defecto cubre escribir archivos y crear carpetas. Los comandos solo con
+  `flow on 30m --shell` o `/flow 30 terminal`. **Aviso:** un comando corre
+  con todo tu poder de usuario, así que en Flow de terminal el modelo podría
+  hacer cualquier cosa que tú puedas (incluso alargar Flow). Úsalo corto.
+- Cada acción en Flow deja recibo con `approval: "flow"` y te avisa por
+  Telegram (`⚡ Flow: …`). Caduca solo.
+
+## Aprobar todo este turno (no estar presionando Aceptar cada 5 segundos)
+
+Cuando Muse hace una ráfaga de peticiones, en el **primer diálogo** toca
+**Aprobar todo este turno**. A partir de ahí, durante **10 minutos que se
+renuevan** cada vez que Muse pide algo más, las escrituras y comandos **dentro
+de carpetas ya autorizadas** (`grant write` / `grant shell`) pasan sin
+preguntar. Cuando Muse deja de pedir, el turno se apaga solo.
+
+- **Nunca amplía un permiso.** Solo se ofrece el botón cuando la petición ya
+  está dentro de una carpeta concedida; fuera de ellas el diálogo sigue igual
+  (dos botones) y sigue preguntando. `~/.ssh`, credenciales y el estado de
+  muse-node siguen negados siempre. Si quieres que cubra más carpetas, da el
+  grant tú: `muse-node grant write <carpeta>`.
+- Cada acción del turno deja recibo con `approval: "turn"` y, si tienes
+  Telegram vinculado, te llega un aviso (`🟢 Turno aprobado…` al encenderse,
+  `🔁 Turno: …` por cada acción).
+- Es lo mismo que Flow, con dos diferencias: se enciende **desde el diálogo**,
+  y cubre escrituras **y** comandos a la vez (dentro de sus grants).
+  Para encenderlo/apagarlo a mano: `muse-node turn on 10` · `muse-node turn off`.
+- **Todo queda en el log para deshacer.** Antes de cada escritura se guarda el
+  estado previo del archivo; `muse-node undo list` muestra lo reversible y
+  `muse-node undo <seq>` lo revierte:
+  - archivo **sobrescrito** → vuelve a su contenido anterior (verificando el
+    hash de la copia guardada);
+  - archivo o carpeta **creados** por Muse → se eliminan (una carpeta, solo si
+    sigue vacía);
+  - `shell.exec` → queda registrado (hash + vista previa del comando) pero
+    **no se puede deshacer automáticamente**: un comando puede hacer cualquier
+    cosa. Revísalo en `undo list` / `receipts`.
+  Un undo también deja entrada en el log encadenado; no se puede deshacer dos
+  veces la misma acción.
+
+## Comandos de shell
+
+Se ejecutan con `bash --noprofile --norc` y un entorno mínimo (PATH, HOME,
+idioma): tus tokens y variables secretas de la sesión **no** llegan al
+comando. Al terminar o agotar el tiempo se mata el grupo de procesos entero,
+también lo que haya quedado en segundo plano.
+
+## Si algo falla
+
+- `status` dice `DEGRADED`/`RECONNECTING`: el daemon se está recuperando solo.
+  Mira `last_error` en `status`.
+- Muse dice `permission_denied`: mira `receipts 5`; el campo `failed` explica
+  qué verificación lo negó.
+- Probar la reconexión a propósito:
+  `systemctl --user kill --kill-whom=main -s SIGUSR2 muse-node.service`

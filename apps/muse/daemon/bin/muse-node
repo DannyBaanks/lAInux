@@ -6,9 +6,29 @@ const { brokerRequest } = require('../../client/broker');
 const { JsonStreamParser } = require('../lib/json-stream');
 const { connectPrimaryGateway } = require('../lib/primary');
 const { NoiseRpcClient } = require('../lib/rpc');
-const { createCommandRegistry } = require('../lib/commands');
+const fs = require('node:fs');
+const { createCommandRegistry, killAllProcessGroups } = require('../lib/commands');
+const { InvokeLedger } = require('../lib/invoke-ledger');
+const { NodeStatus, defaultStatusPath } = require('../lib/node-state');
+const { WorkspaceAuthority, GRANT_ALIASES, defaultStateDirectory } = require('../lib/workspace-authority');
+const { ReceiptLog } = require('../lib/receipts');
+
+function receiptsFile() { return path.join(defaultStateDirectory(), 'receipts', 'muse-node.jsonl'); }
 const { MuseNodeService } = require('../lib/node-service');
-const { createZenityApprover } = require('../lib/approval');
+const { createZenityChannel } = require('../lib/approval');
+const { createApprovalBroker } = require('../lib/approval-broker');
+const { FlowMode, parseMinutes } = require('../lib/flow');
+const { TurnApproval } = require('../lib/turn-approval');
+const { UndoLog } = require('../lib/undo-log');
+const telegram = require('../lib/telegram');
+const keyring = require('../lib/keyring');
+
+const TELEGRAM_ACCOUNT = 'telegram-bot-token';
+function flowFile() { return path.join(defaultStateDirectory(), 'flow.json'); }
+// "Approve everything for this turn" state and the undo log live next to
+// flow.json, inside the protected authority directory.
+function turnFile() { return path.join(defaultStateDirectory(), 'turn.json'); }
+function undoDirectory() { return path.join(defaultStateDirectory(), 'undo'); }
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
 
 async function openGateway(profile, { cold = false } = {}) {
@@ -147,45 +167,280 @@ async function nodes(profile, options = {}) {
   }
 }
 
-// Long-running node: one gateway session at a time; when the gateway closes
-// the socket (idle, redeploy, protocol error) reconnect with capped backoff so
-// Muse never sees the computer go silent for good.
+// Long-running node: one gateway session at a time. A session ends when the
+// socket closes OR the service reports it lost (subscription stream ended,
+// heartbeats failing, capabilities not accepted): an open socket alone is not
+// "online". Reconnect with capped exponential backoff plus jitter. Invocations
+// live in a process-wide ledger so a redelivery after reconnect replays the
+// stored result instead of running the command twice.
+//   SIGUSR2  drop the current gateway session on purpose (reconnect test)
+function backoffWithJitter(baseMs, random = Math.random) {
+  return Math.round(baseMs / 2 + random() * baseMs / 2);
+}
+
 async function start(profile, options = {}) {
+  const status = new NodeStatus();
+  const ledger = new InvokeLedger();
+  // One authority + receipt chain for the whole process; the policy file is
+  // re-read on every decision, so `muse-node revoke/lock` apply immediately.
+  const authority = new WorkspaceAuthority();
+  const receipts = new ReceiptLog({ file: receiptsFile() });
+  const flow = new FlowMode({ file: flowFile() });
+  const turn = new TurnApproval({ file: turnFile() });
+  const undoLog = new UndoLog({ directory: undoDirectory() });
+  // Approval channels the model cannot reach: the desktop dialog and, when
+  // paired, the private Telegram chat. First explicit answer wins.
+  const channels = [createZenityChannel()];
+  const phone = openTelegramChannel({ flow, authority });
+  if (phone) channels.push(phone.start());
+  const approve = createApprovalBroker({ channels });
+  const onFlow = (ask) => {
+    const target = ask.command_id === 'shell.exec' ? `$ ${String(ask.params?.command ?? '').slice(0, 300)}` : ask.target;
+    console.log(`[muse-node] flow: ${ask.command_id} approved by Flow mode`);
+    phone?.notify(`⚡ Flow: ${ask.command_id}\n${target}`);
+  };
+  // Called by the gate after an action passed thanks to the turn.
+  // enabled=true: the operator just tapped "Aprobar todo este turno" on
+  // this request, so the mode is switched on from here (operator decision,
+  // desktop channel). enabled=false: an already active turn covered it.
+  const onTurn = (ask) => {
+    const target = ask.command_id === 'shell.exec' ? `$ ${String(ask.params?.command ?? '').slice(0, 300)}` : ask.target;
+    if (ask.enabled) {
+      try {
+        const state = turn.enable('desktop');
+        console.log(`[muse-node] turn: approved on ${ask.command_id} until ${state.until}`);
+        phone?.notify(`🟢 Turno aprobado desde el escritorio hasta ${state.until.slice(11, 16)} UTC\n${ask.command_id}\n${target}\nFuera de carpetas autorizadas sigue preguntando. Apagar: muse-node turn off`);
+      } catch (error) { console.error(`[muse-node] turn: ${error.message}`); }
+      return;
+    }
+    console.log(`[muse-node] turn: ${ask.command_id} approved by the active turn`);
+    phone?.notify(`🔁 Turno: ${ask.command_id}\n${target}`);
+  };
   let stopping = false;
   let wake = null;
-  const stop = () => { stopping = true; wake?.(); };
+  let dropSession = null;
+  const stop = () => { stopping = true; wake?.(); dropSession?.('daemon stopping'); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  process.on('SIGUSR2', () => {
+    console.error('[muse-node] SIGUSR2: dropping the gateway session on purpose');
+    dropSession?.('SIGUSR2 controlled disconnect');
+  });
   let backoffMs = 1000;
   while (!stopping) {
     let session = null;
+    let reason = 'unknown';
     try {
       session = await openGateway(profile, options);
       const { identity, connection, rpc } = session;
-      const registry = createCommandRegistry({ approve: createZenityApprover() });
-      const service = new MuseNodeService({ rpc, identity, registry });
+      const registry = createCommandRegistry({ approve, authority, receipts, flow, onFlow, turn, onTurn, undoLog });
+      const service = new MuseNodeService({ rpc, identity, registry, ledger, status });
       session.service = service;
-      const closed = new Promise((resolve) => {
-        wake = resolve;
-        connection.ws.addEventListener('close', resolve, { once: true });
+      const ended = new Promise((resolve) => {
+        dropSession = resolve;
+        connection.ws.addEventListener('close', () => resolve(`gateway closed: ${JSON.stringify(connection.closeInfo)}`), { once: true });
+        service.lost.then(resolve);
       });
+      wake = () => dropSession?.('daemon stopping');
       const { registration } = await service.start();
       console.log(`[muse-node] online as ${identity.displayName}: ${JSON.stringify(registration)}`);
       console.log(`[muse-node] commands: ${Object.keys(registry.definitions).join(', ')}`);
-      backoffMs = 1000;
-      await closed;
-      if (!stopping) console.error(`[muse-node] gateway closed: ${JSON.stringify(connection.closeInfo)}; reconnecting`);
+      if (status.state === 'READY') backoffMs = 1000;
+      reason = await ended;
     } catch (error) {
-      console.error(`[muse-node] session failed: ${error.message}`);
+      reason = `session failed: ${error.message}`;
+      status.error(reason);
     } finally {
+      dropSession = null;
       await session?.service?.close();
       session?.rpc.close();
       session?.connection.close();
     }
     if (stopping) break;
-    await new Promise((resolve) => { wake = resolve; setTimeout(resolve, backoffMs); });
+    console.error(`[muse-node] ${reason}; reconnecting`);
+    if (['CONNECTING', 'REGISTERED', 'READY'].includes(status.state)) status.transition('DEGRADED', reason);
+    status.transition('RECONNECTING', reason);
+    const delay = backoffWithJitter(backoffMs);
+    console.error(`[muse-node] reconnect in ${delay} ms (${ledger.running} command(s) still running)`);
+    await new Promise((resolve) => { wake = resolve; setTimeout(resolve, delay); });
     backoffMs = Math.min(backoffMs * 2, 60000);
   }
+  await phone?.stop();
+  const killed = killAllProcessGroups('SIGTERM');
+  if (killed) console.error(`[muse-node] stopping: sent SIGTERM to ${killed} shell.exec process group(s)`);
+  status.transition('DISCONNECTED', 'daemon stopped');
+}
+
+function telegramTransport() {
+  let cached = null;
+  return new telegram.TelegramTransport({ token: () => (cached ??= keyring.getSecret(TELEGRAM_ACCOUNT)) });
+}
+
+// Paired private chat -> approval channel; anything missing -> desktop only.
+function openTelegramChannel({ flow, authority }) {
+  let peer;
+  try { peer = telegram.readPeer(); } catch (error) { console.error(`[muse-node] telegram: ${error.message}; desktop approvals only`); return null; }
+  if (!peer) { console.log('[muse-node] telegram: not paired (muse-node telegram pair); desktop approvals only'); return null; }
+  return new telegram.TelegramApprovals({ transport: telegramTransport(), peer, flow, authority });
+}
+
+function prompt(question, { hidden = false } = {}) {
+  const readline = require('node:readline');
+  return new Promise((resolve, reject) => {
+    if (!process.stdin.isTTY) { reject(new Error('this step needs an interactive terminal')); return; }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    if (hidden) rl._writeToOutput = (text) => { if (text.includes(question)) process.stdout.write(text); };
+    rl.question(question, (answer) => { rl.close(); if (hidden) process.stdout.write('\n'); resolve(answer.trim()); });
+  });
+}
+
+async function telegramCommand(sub, args) {
+  if (sub === 'pair') {
+    console.log('1) En Telegram abre @BotFather, envía /newbot y copia el token que te da.');
+    const token = await prompt('2) Pega aquí el token (no se ve, no se guarda en archivos): ', { hidden: true });
+    if (!telegram.TOKEN.test(token)) throw new Error('eso no parece un token de BotFather');
+    const transport = new telegram.TelegramTransport({ token: () => token });
+    const bot = await transport.getMe();
+    await transport.ensurePolling();
+    const pin = require('node:crypto').randomBytes(4).toString('hex');
+    console.log(`3) Abre https://t.me/${bot.username} y envíale exactamente:\n\n     /pair ${pin}\n\n   (tienes 3 minutos)`);
+    const who = await telegram.waitForPairing(transport, pin);
+    const ok = await prompt(`Recibido de ${who.name || '?'}${who.username ? ` (@${who.username})` : ''}, id ${who.userId}. ¿Es tu cuenta? [s/N] `);
+    if (!/^s(i|í)?$/i.test(ok)) throw new Error('vinculación cancelada');
+    keyring.setSecret(TELEGRAM_ACCOUNT, token);
+    const peer = new telegram.Peer({ bot_id: bot.id, user_id: who.userId, chat_id: who.userId });
+    telegram.writePeer(peer);
+    await transport.send(peer.chatId, `✅ Vinculado con muse-node en ${require('node:os').hostname()}.\nAquí te llegarán las aprobaciones. Escribe /estado para ver las opciones.`).catch(() => {});
+    console.log(`Vinculado: bot @${bot.username} ↔ tu chat privado. Token en el keyring, vínculo en ${telegram.defaultPeerFile()}.`);
+    console.log('Reinicia el daemon para usarlo:  systemctl --user restart muse-node.service');
+  } else if (sub === 'status') {
+    const peer = telegram.readPeer();
+    if (!peer) { console.log('telegram: no vinculado (muse-node telegram pair)'); return; }
+    const bot = await telegramTransport().getMe();
+    console.log(JSON.stringify({ paired: true, bot: `@${bot.username}`, bot_id: peer.botId, user_id: peer.userId, peer_file: telegram.defaultPeerFile() }, null, 2));
+  } else if (sub === 'unpair') {
+    try { fs.unlinkSync(telegram.defaultPeerFile()); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    keyring.deleteSecret(TELEGRAM_ACCOUNT);
+    console.log('telegram desvinculado (token borrado del keyring). Reinicia el daemon.');
+  } else if (sub === 'test') {
+    // Sends a sample approval that executes NOTHING, to check the buttons.
+    const peer = telegram.readPeer();
+    if (!peer) throw new Error('no vinculado: muse-node telegram pair');
+    const phone = new telegram.TelegramApprovals({ transport: telegramTransport(), peer, ttlMs: 110000 });
+    phone.start();
+    for (let i = 0; i < 50 && !phone.available(); i++) await new Promise((resolve) => setTimeout(resolve, 200));
+    if (!phone.available()) { await phone.stop(); throw new Error('Telegram no responde (¿otro proceso está leyendo el bot? para el daemon antes del test)'); }
+    const digest = require('node:crypto').createHash('sha256').update(`test ${Date.now()}`).digest('hex');
+    console.log('Mensaje de prueba enviado: pulsa Permitir o Rechazar en el celular (110 s)…');
+    const answer = await phone.ask({ command_id: 'shell.exec', params: { command: 'echo "prueba de aprobación: no se ejecuta nada"', cwd: '~' }, digest });
+    await phone.stop();
+    console.log(`respuesta: ${answer === null ? 'sin respuesta (caducó)' : JSON.stringify(answer)}`);
+  } else {
+    throw new Error('usage: muse-node telegram pair|status|test|unpair');
+  }
+}
+
+function flowCommand(sub, args) {
+  const flow = new FlowMode({ file: flowFile() });
+  if (sub === 'on') {
+    const shell = args.includes('--shell');
+    const state = flow.enable(parseMinutes(args.find((arg) => !arg.startsWith('--')) ?? '30'), 'terminal', shell ? 'all' : 'write');
+    console.log(`Flow ON (${state.scope === 'all' ? 'escritura + terminal' : 'escritura'}) hasta ${state.until}: sin pedir permiso DENTRO de las carpetas ya autorizadas (muse-node policy). Credenciales siguen negadas. Apagar: muse-node flow off`);
+    if (shell) console.log('AVISO: con --shell, un comando aprobado por Flow corre con todo tu poder de usuario.');
+  } else if (sub === 'off') {
+    flow.disable();
+    console.log('Flow OFF: vuelvo a pedir permiso.');
+  } else if (!sub || sub === 'status') {
+    console.log(JSON.stringify(flow.status()));
+  } else {
+    throw new Error('usage: muse-node flow on [30m|2h] [--shell] | off | status');
+  }
+}
+
+// Operator commands. They run in the operator's terminal, never through a
+// model-reachable command: grants are a human decision.
+function authorityCommand(command, args) {
+  const authority = new WorkspaceAuthority();
+  const actionsFor = (name) => GRANT_ALIASES[name] ?? [name];
+  if (command === 'policy') {
+    console.log(JSON.stringify({ policy_file: authority.policyPath, ...authority.policy() }, null, 2));
+  } else if (command === 'grant') {
+    const [name, ...paths] = args;
+    if (!name) throw new Error('usage: muse-node grant read|write|shell|which|<action-id> [folder...]');
+    for (const actionId of actionsFor(name)) {
+      const needsPaths = actionId.startsWith('workspace.');
+      if (needsPaths && !paths.length) throw new Error(`${actionId} needs at least one folder`);
+      const current = authority.policy().grants[actionId]?.path_prefixes ?? [];
+      const grant = authority.setGrant(actionId, { enabled: true, ...(needsPaths ? { pathPrefixes: [...current, ...paths] } : {}) });
+      console.log(`granted ${actionId}${grant.path_prefixes ? ` in ${grant.path_prefixes.join(', ')}` : ''}`);
+    }
+  } else if (command === 'revoke') {
+    const [name] = args;
+    if (!name) throw new Error('usage: muse-node revoke read|write|shell|which|<action-id>');
+    for (const actionId of actionsFor(name)) { authority.setGrant(actionId, { enabled: false, pathPrefixes: [] }); console.log(`revoked ${actionId}`); }
+  } else if (command === 'lock' || command === 'unlock') {
+    authority.setLocked(command === 'lock');
+    console.log(command === 'lock' ? 'LOCKED: every command except ping is denied' : 'unlocked');
+  } else if (command === 'receipts') {
+    if (args.includes('--verify')) { console.log(JSON.stringify(ReceiptLog.verify(receiptsFile()))); return; }
+    const count = Number(args.find((value) => /^\d+$/.test(value)) ?? 20);
+    try { process.stdout.write(fs.readFileSync(receiptsFile(), 'utf8').trimEnd().split('\n').slice(-count).join('\n') + '\n'); }
+    catch (error) { if (error.code === 'ENOENT') console.log('no receipts yet'); else throw error; }
+  } else if (command === 'turn') {
+    turnCommand(args[0], args.slice(1));
+  } else if (command === 'undo') {
+    undoCommand(args[0], args.slice(1));
+  }
+}
+
+function turnCommand(sub, args) {
+  const turn = new TurnApproval({ file: turnFile() });
+  if (sub === 'on') {
+    const raw = args.find((arg) => /^\d+(m|min)?$/.test(arg)) ?? '10';
+    const minutes = Number(raw.replace(/(m|min)$/, ''));
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 30) throw new Error('usage: muse-node turn on [1..30 minutos, por defecto 10]');
+    const state = turn.enable('terminal', { windowMs: minutes * 60000 });
+    console.log(`Turno ON hasta ${state.until}: dentro de las carpetas ya autorizadas (muse-node policy) Muse no vuelve a preguntar; cada acción renueva la ventana. Fuera de grants, credenciales y rutas de autoridad siguen igual. Apagar: muse-node turn off`);
+  } else if (sub === 'off') {
+    turn.disable();
+    console.log('Turno OFF: vuelvo a pedir permiso petición por petición.');
+  } else if (!sub || sub === 'status') {
+    const state = turn.status();
+    console.log(state.active ? JSON.stringify({ ...state, remaining_min: Math.round(state.remainingMs / 60000) }) : JSON.stringify(state));
+  } else {
+    throw new Error('usage: muse-node turn on [10|10m] | off | status');
+  }
+}
+
+function describeUndo(entry) {
+  const when = entry.at.slice(0, 19).replace('T', ' ');
+  const action = entry.action_id === 'workspace.command.run' ? 'shell.exec' : 'files.*';
+  const plan = entry.undo?.op ?? null;
+  const how = { remove_created: 'eliminar (lo creó Muse)', remove_folder_if_empty: 'eliminar si está vacía', restore_copy: 'restaurar contenido previo' }[plan] ?? (entry.reversible ? '' : 'no reversible');
+  return `${String(entry.seq).padStart(4)}  ${when}  ${entry.approval ?? '-'}  ${action}  ${entry.target ?? ''}  ${how}`;
+}
+
+function undoCommand(sub, args) {
+  const log = new UndoLog({ directory: undoDirectory() });
+  if (!sub || sub === 'list') {
+    const rows = log.undoable();
+    if (!rows.length) { console.log('Nada que deshacer (todavía no hay acciones reversibles sin deshacer).'); return; }
+    console.log('  seq  momento                 aprobado  acción  objetivo  cómo se deshace');
+    for (const row of rows) console.log(describeUndo(row));
+    console.log(`\nDeshacer: muse-node undo <seq> [--dry-run]   (shell.exec nunca se deshace solo)`);
+    return;
+  }
+  if (!/^\d+$/.test(sub)) throw new Error('usage: muse-node undo list | <seq> [--dry-run]');
+  const dryRun = args.includes('--dry-run');
+  const entry = log.entries().find((item) => item.kind === 'DONE' && item.seq === Number(sub));
+  if (entry && dryRun) { console.log(`DRY RUN seq ${entry.seq}: ${JSON.stringify(log.undo(sub, { dryRun: true }).plan)}  (no se tocó nada)`); return; }
+  const result = log.undo(Number(sub));
+  console.log(`Deshecho seq ${result.seq_undone}: ${JSON.stringify(result.plan)}`);
+}
+
+function printStatus() {
+  try { process.stdout.write(fs.readFileSync(defaultStatusPath(), 'utf8')); }
+  catch (error) { console.error(`[muse-node] no status yet (${error.code ?? error.message}): is the daemon running?`); process.exitCode = 1; }
 }
 
 function stayMs() {
@@ -201,6 +456,10 @@ async function main() {
     console.log(JSON.stringify({ nodeId: identity.nodeId, displayName: identity.displayName, platform: identity.platform, profile: path.join(profile, 'node-identity.json') }, null, 2));
     return;
   }
+  if (command === 'status') return printStatus();
+  if (command === 'telegram') return telegramCommand(process.argv[3], process.argv.slice(4));
+  if (command === 'flow') return flowCommand(process.argv[3], process.argv.slice(4));
+  if (['policy', 'grant', 'revoke', 'lock', 'unlock', 'receipts', 'turn', 'undo'].includes(command)) return authorityCommand(command, process.argv.slice(3));
   const options = { cold: process.argv.includes('--cold'), stayMs: stayMs() };
   if (command === 'probe') return probe(profile, options);
   if (command === 'register') return register(profile, options);

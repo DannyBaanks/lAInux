@@ -1,0 +1,32 @@
+# lAInux.mods Phase 1 live gate — ISySentinel, daemon 5d95938; invokes sent by Danny from Muse
+# NOTE: home paths redacted to ~ for the public repo; receipt hashes were computed over the unredacted lines (the --verify result below was taken before redaction).
+# grants: read (list/read/search) in ~/Documents only
+# 1 files.list ~/Documents -> quiet EXECUTE/RETURN; 2 files.read ~/.ssh/known_hosts -> DENY, no dialog; 3 files.write ~/Documents/sentinel-test.txt -> dialog, Rechazar -> DENY, file absent
+
+## receipts
+{"v":1,"seq":1,"at":"2026-11-28T00:48:52.192Z","kind":"EXECUTE","action_id":"workspace.files.list","digest":"f3718db69e95aa3adf6ff625735fdd9ac18e6fd450a8faac7ccee1305aa43fc3","target":"~/Documents","invoke_id":"1450bc19-d889-4223-a18a-301d07a8bbfe","command_id":"files.list","grant":"grant:workspace.files.list","approval":null,"prev":"0000000000000000000000000000000000000000000000000000000000000000","hash":"10f1cc31b2164c40824b4f7eca713517801d55413a1a227eca0b1520bb712251"}
+{"v":1,"seq":2,"at":"2026-11-28T00:48:52.233Z","kind":"RETURN","action_id":"workspace.files.list","digest":"f3718db69e95aa3adf6ff625735fdd9ac18e6fd450a8faac7ccee1305aa43fc3","target":"~/Documents","invoke_id":"1450bc19-d889-4223-a18a-301d07a8bbfe","ok":true,"error_code":null,"output_sha256":"44602759d68f81d31b731627bce5e2a052af85c34587b05dc8a642523f8614e1","output_bytes":2125,"prev":"10f1cc31b2164c40824b4f7eca713517801d55413a1a227eca0b1520bb712251","hash":"f12b7a1b605918faadd32bbf6e1378492449f6fabbaa2669704a907e0365953c"}
+{"v":1,"seq":3,"at":"2026-11-28T00:48:52.245Z","kind":"DENY","action_id":"workspace.files.read","digest":"4a19e4d930afb3eeb61957989dbd962ee2f28fe22f492d108fff2704d653af82","target":"~/.ssh/known_hosts","invoke_id":"fe921a40-2667-4ae1-b569-ff828ee8266b","command_id":"files.read","failed":[{"name":"Authority","reason":"filesystem target is outside granted paths"},{"name":"SensitivePath","reason":".ssh is a credential store"}],"prev":"f12b7a1b605918faadd32bbf6e1378492449f6fabbaa2669704a907e0365953c","hash":"ac1a3bfaa7c520e4d1203ebd3d2473edd3b162f92dcb08bfa122ec99ef5a0fea"}
+{"v":1,"seq":4,"at":"2026-11-28T00:48:59.726Z","kind":"DENY","action_id":"workspace.files.write","digest":"50601e9162d883a10677b462bb2601ae5c1ccf5ae1203e048ef4831e795a9e0e","target":"~/Documents/sentinel-test.txt","invoke_id":"5dd1c1ee-03bb-4ea5-bbf9-5c64ff73017e","command_id":"files.write","failed":[{"name":"Authority","reason":"the user did not approve this action"}],"prev":"ac1a3bfaa7c520e4d1203ebd3d2473edd3b162f92dcb08bfa122ec99ef5a0fea","hash":"d6fa845e409c8afdd0d94b19005a5352a2f83375b37d8a6fe08fd2a675a01cb3"}
+
+## receipts --verify
+{"ok":true,"count":4,"head":"d6fa845e409c8afdd0d94b19005a5352a2f83375b37d8a6fe08fd2a675a01cb3"}
+
+## canary
+ls: no se puede acceder a '~/Documents/sentinel-test.txt': No existe el archivo o el directorio
+
+## journal
+2026-11-27T18:34:52-06:00 DannyISyCo node[4191952]: [muse-node] state READY -> DISCONNECTED (daemon stopped)
+2026-11-27T18:34:55-06:00 DannyISyCo node[69617]: [muse-node] state DISCONNECTED -> CONNECTING (gateway session open)
+2026-11-27T18:34:57-06:00 DannyISyCo node[69617]: [muse-node] state CONNECTING -> REGISTERED (node.register ok)
+2026-11-27T18:34:57-06:00 DannyISyCo node[69617]: [muse-node] state REGISTERED -> READY (8/8 device commands accepted)
+2026-11-27T18:36:12-06:00 DannyISyCo node[69617]: [muse-node] session lost: 3 consecutive heartbeat failures: Noise RPC timed out: POST /api/nodes/heartbeat
+2026-11-27T18:36:12-06:00 DannyISyCo node[69617]: [muse-node] state READY -> DEGRADED (3 consecutive heartbeat failures: Noise RPC timed out: POST /api/nodes/heartbeat)
+2026-11-27T18:36:12-06:00 DannyISyCo node[69617]: [muse-node] state DEGRADED -> RECONNECTING (3 consecutive heartbeat failures: Noise RPC timed out: POST /api/nodes/heartbeat)
+2026-11-27T18:40:12-06:00 DannyISyCo node[69617]: [muse-node] state RECONNECTING -> CONNECTING (gateway session open)
+2026-11-27T18:40:13-06:00 DannyISyCo node[69617]: [muse-node] state CONNECTING -> REGISTERED (node.register ok)
+2026-11-27T18:40:13-06:00 DannyISyCo node[69617]: [muse-node] state REGISTERED -> READY (8/8 device commands accepted)
+2026-11-27T18:48:52-06:00 DannyISyCo node[69617]: [muse-node] invoke fe921a40-2667-4ae1-b569-ff828ee8266b: ok=false HTTP 200
+2026-11-27T18:48:52-06:00 DannyISyCo node[69617]: [muse-node] invoke 1450bc19-d889-4223-a18a-301d07a8bbfe: ok=true HTTP 200
+2026-11-27T18:48:59-06:00 DannyISyCo node[69617]: [muse-node] approval files.write: denied (exit 1)
+2026-11-27T18:48:59-06:00 DannyISyCo node[69617]: [muse-node] invoke 5dd1c1ee-03bb-4ea5-bbf9-5c64ff73017e: ok=false HTTP 200
