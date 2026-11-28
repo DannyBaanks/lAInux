@@ -1,0 +1,99 @@
+# lAInux.mods Phase 0 gate — controlled disconnect, recovery, real invoke (no manual restart, no duplicate)
+# daemon commit 2827a92; invoke sent by Danny from the Muse iPhone app: 'lista mi carpeta Documents'
+
+2026-11-27T18:07:47-06:00 DannyISyCo systemd[1855]: Stopping muse-node.service - Muse Linux computer node (lAInux)...
+2026-11-27T18:07:47-06:00 DannyISyCo node[3571379]: [muse-node] subscription ended: Noise RPC client closed
+2026-11-27T18:07:47-06:00 DannyISyCo systemd[1855]: Stopped muse-node.service - Muse Linux computer node (lAInux).
+2026-11-27T18:07:47-06:00 DannyISyCo systemd[1855]: muse-node.service: Consumed 5.491s CPU time, 265.6M memory peak, 30.6M memory swap peak.
+2026-11-27T18:07:47-06:00 DannyISyCo systemd[1855]: Started muse-node.service - Muse Linux computer node (lAInux).
+2026-11-27T18:07:47-06:00 DannyISyCo node[4191952]: [muse-node] identity 722db9f7-c8d1-4aa9-8e04-8bf04e5cc814 (DannyISyCo (Linux))
+2026-11-27T18:07:47-06:00 DannyISyCo node[4191952]: [muse-node] requesting standard VM credentials from the Muse shell…
+2026-11-27T18:07:49-06:00 DannyISyCo node[4191952]: [muse-node] VM f2653693-1480-4310-bc3f-4ce61c77bd47; opening Noise_XX_25519_AESGCM_SHA256…
+2026-11-27T18:07:49-06:00 DannyISyCo node[4191952]: [muse-node] handshake OK: type=standard rv=none
+2026-11-27T18:07:49-06:00 DannyISyCo node[4191952]: [muse-node] state DISCONNECTED -> CONNECTING (gateway session open)
+2026-11-27T18:07:50-06:00 DannyISyCo node[4191952]: [muse-node] state CONNECTING -> REGISTERED (node.register ok)
+2026-11-27T18:07:50-06:00 DannyISyCo node[4191952]: [muse-node] capabilities HTTP 200: {"accepted_data_sources":0,"accepted_device_commands":8,"accepted_hatch_app_commands":0,"capabilities":["video_file_ref_ingest","voice_user_speech_status","response_share_snapshot"],"rejected_ids":[]}
+2026-11-27T18:07:50-06:00 DannyISyCo node[4191952]: [muse-node] state REGISTERED -> READY (8/8 device commands accepted)
+2026-11-27T18:07:50-06:00 DannyISyCo node[4191952]: [muse-node] online as DannyISyCo (Linux): {"node_id":"722db9f7-c8d1-4aa9-8e04-8bf04e5cc814","status":"registered"}
+2026-11-27T18:07:50-06:00 DannyISyCo node[4191952]: [muse-node] commands: ping, system.which, files.list, files.search, files.read, files.write, files.mkdir, shell.exec
+2026-11-27T18:07:56-06:00 DannyISyCo systemd[1855]: muse-node.service: Sent signal SIGUSR2 to main process 4191952 (MainThread) on client request.
+2026-11-27T18:07:56-06:00 DannyISyCo node[4191952]: [muse-node] SIGUSR2: dropping the gateway session on purpose
+2026-11-27T18:07:56-06:00 DannyISyCo node[4191952]: [muse-node] SIGUSR2 controlled disconnect; reconnecting
+2026-11-27T18:07:56-06:00 DannyISyCo node[4191952]: [muse-node] state READY -> DEGRADED (SIGUSR2 controlled disconnect)
+2026-11-27T18:07:56-06:00 DannyISyCo node[4191952]: [muse-node] state DEGRADED -> RECONNECTING (SIGUSR2 controlled disconnect)
+2026-11-27T18:07:56-06:00 DannyISyCo node[4191952]: [muse-node] reconnect in 715 ms (0 command(s) still running)
+2026-11-27T18:07:56-06:00 DannyISyCo node[4191952]: [muse-node] identity 722db9f7-c8d1-4aa9-8e04-8bf04e5cc814 (DannyISyCo (Linux))
+2026-11-27T18:07:56-06:00 DannyISyCo node[4191952]: [muse-node] requesting standard VM credentials from the Muse shell…
+2026-11-27T18:07:57-06:00 DannyISyCo node[4191952]: [muse-node] VM f2653693-1480-4310-bc3f-4ce61c77bd47; opening Noise_XX_25519_AESGCM_SHA256…
+2026-11-27T18:07:58-06:00 DannyISyCo node[4191952]: [muse-node] handshake OK: type=standard rv=none
+2026-11-27T18:07:58-06:00 DannyISyCo node[4191952]: [muse-node] state RECONNECTING -> CONNECTING (gateway session open)
+2026-11-27T18:07:58-06:00 DannyISyCo node[4191952]: [muse-node] state CONNECTING -> REGISTERED (node.register ok)
+2026-11-27T18:07:58-06:00 DannyISyCo node[4191952]: [muse-node] capabilities HTTP 200: {"accepted_data_sources":0,"accepted_device_commands":8,"accepted_hatch_app_commands":0,"capabilities":["video_file_ref_ingest","voice_user_speech_status","response_share_snapshot"],"rejected_ids":[]}
+2026-11-27T18:07:58-06:00 DannyISyCo node[4191952]: [muse-node] state REGISTERED -> READY (8/8 device commands accepted)
+2026-11-27T18:07:58-06:00 DannyISyCo node[4191952]: [muse-node] online as DannyISyCo (Linux): {"node_id":"722db9f7-c8d1-4aa9-8e04-8bf04e5cc814","status":"registered"}
+2026-11-27T18:07:58-06:00 DannyISyCo node[4191952]: [muse-node] commands: ping, system.which, files.list, files.search, files.read, files.write, files.mkdir, shell.exec
+2026-11-27T18:12:54-06:00 DannyISyCo node[4191952]: [muse-node] invoke 24b0d43f-dfe6-438b-931e-a51a74dc9e87: ok=true HTTP 200
+
+# status.json after the invoke
+{
+  "state": "READY",
+  "since": "2026-11-28T00:07:58.627Z",
+  "pid": 4191952,
+  "sessions": 2,
+  "reconnects": 1,
+  "last_heartbeat_ok": "2026-11-28T00:14:31.133Z",
+  "last_invoke_ok": "2026-11-28T00:12:54.599Z",
+  "last_invoke_id": "24b0d43f-dfe6-438b-931e-a51a74dc9e87",
+  "last_error": null,
+  "reason": "8/8 device commands accepted",
+  "history": [
+    {
+      "at": "2026-11-28T00:07:49.730Z",
+      "from": "DISCONNECTED",
+      "to": "CONNECTING",
+      "reason": "gateway session open"
+    },
+    {
+      "at": "2026-11-28T00:07:50.078Z",
+      "from": "CONNECTING",
+      "to": "REGISTERED",
+      "reason": "node.register ok"
+    },
+    {
+      "at": "2026-11-28T00:07:50.187Z",
+      "from": "REGISTERED",
+      "to": "READY",
+      "reason": "8/8 device commands accepted"
+    },
+    {
+      "at": "2026-11-28T00:07:56.032Z",
+      "from": "READY",
+      "to": "DEGRADED",
+      "reason": "SIGUSR2 controlled disconnect"
+    },
+    {
+      "at": "2026-11-28T00:07:56.032Z",
+      "from": "DEGRADED",
+      "to": "RECONNECTING",
+      "reason": "SIGUSR2 controlled disconnect"
+    },
+    {
+      "at": "2026-11-28T00:07:58.292Z",
+      "from": "RECONNECTING",
+      "to": "CONNECTING",
+      "reason": "gateway session open"
+    },
+    {
+      "at": "2026-11-28T00:07:58.550Z",
+      "from": "CONNECTING",
+      "to": "REGISTERED",
+      "reason": "node.register ok"
+    },
+    {
+      "at": "2026-11-28T00:07:58.627Z",
+      "from": "REGISTERED",
+      "to": "READY",
+      "reason": "8/8 device commands accepted"
+    }
+  ]
+}
