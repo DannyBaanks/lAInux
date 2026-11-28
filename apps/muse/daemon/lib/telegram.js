@@ -22,6 +22,15 @@ const os = require('node:os');
 const path = require('node:path');
 const { describe } = require('./approval');
 
+// Node's happy-eyeballs gives each address 250 ms; on a lossy route to the
+// Bot API that alone fails the connect (seen live: ETIMEDOUT after ~290 ms).
+require('node:net').setDefaultAutoSelectFamilyAttemptTimeout(2500);
+
+// Errors where the TCP/TLS connection never opened: nothing was sent, so a
+// retry cannot duplicate a message or a button press.
+const CONNECT_ERRORS = new Set(['ETIMEDOUT', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT']);
+const CONNECT_ATTEMPTS = 3;
+
 const TOKEN = /^[0-9]{5,16}:[A-Za-z0-9_-]{20,100}$/;
 const METHODS = new Set(['getMe', 'getWebhookInfo', 'getUpdates', 'sendMessage', 'editMessageText', 'answerCallbackQuery']);
 const MAX_RESPONSE = 4 * 1024 * 1024;
@@ -38,7 +47,18 @@ class TelegramTransport {
     this.fetchImpl = fetchImpl;
   }
 
-  async call(method, payload = {}, { signal, timeoutMs = 45000 } = {}) {
+  async call(method, payload = {}, options = {}) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.callOnce(method, payload, options);
+      } catch (error) {
+        if (!error.connectFailed || attempt >= CONNECT_ATTEMPTS || options.signal?.aborted) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+  }
+
+  async callOnce(method, payload = {}, { signal, timeoutMs = 45000 } = {}) {
     if (!METHODS.has(method)) throw new TelegramError('method_not_allowed');
     let response;
     let text;
@@ -57,7 +77,9 @@ class TelegramTransport {
       // Never surface the original error: its message or cause can carry the
       // URL. Only a bare error code (e.g. ECONNRESET) is kept, for diagnosis.
       const detail = [error?.cause?.code, error?.code, error?.name].find((value) => typeof value === 'string' && /^[A-Za-z_]{2,40}$/.test(value));
-      throw new TelegramError(signal?.aborted ? 'aborted' : `transport_failure${detail ? ` (${method}: ${detail})` : ` (${method})`}`);
+      const failure = new TelegramError(signal?.aborted ? 'aborted' : `transport_failure${detail ? ` (${method}: ${detail})` : ` (${method})`}`);
+      failure.connectFailed = CONNECT_ERRORS.has(error?.cause?.code ?? error?.code);
+      throw failure;
     }
     if (Buffer.byteLength(text) > MAX_RESPONSE) throw new TelegramError('response_too_large');
     let body;

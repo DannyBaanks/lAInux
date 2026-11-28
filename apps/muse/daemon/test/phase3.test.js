@@ -345,6 +345,21 @@ test('telegram: token never appears in errors; secrets are masked before export'
   assert.equal(maskForExport('export KEY=sk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ok'), 'export «oculto» ok');
 });
 
+test('telegram: connect failures retry (nothing was sent); other failures do not', async () => {
+  let calls = 0;
+  const flaky = new TelegramTransport({ token: () => TOKEN, fetchImpl: async () => {
+    calls++;
+    if (calls < 3) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } });
+    return { status: 200, text: async () => JSON.stringify({ ok: true, result: { id: BOT, is_bot: true, username: 'b' } }) };
+  } });
+  assert.equal((await flaky.getMe()).id, BOT);
+  assert.equal(calls, 3);
+  let resets = 0;
+  const midway = new TelegramTransport({ token: () => TOKEN, fetchImpl: async () => { resets++; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); } });
+  await assert.rejects(midway.getMe(), /ECONNRESET/);
+  assert.equal(resets, 1, 'a reset after connecting may have delivered: no retry');
+});
+
 test('telegram: the pairing file must be private and describe a private chat', (context) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-tgpeer-'));
   context.after(() => fs.rmSync(base, { recursive: true, force: true }));
