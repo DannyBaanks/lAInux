@@ -25,9 +25,21 @@ const CONSENT_REASONS = new Set([
   'fresh request-bound approval is required',
 ]);
 
+const FLOW_REASON = 'fresh request-bound approval is required';
+
+// approve() may answer a boolean (single channel) or the Approval Broker's
+// { approved, channel }.
+function normalizeAnswer(answer) {
+  if (answer === true) return { approved: true, channel: null };
+  if (answer && typeof answer === 'object' && answer.approved === true) return { approved: true, channel: typeof answer.channel === 'string' ? answer.channel : null };
+  return { approved: false, channel: null };
+}
+
 class ActionGate {
-  constructor({ authority, approve = async () => false, approvals = new ActionApprovalStore(), receipts = null, owners, home, logger = console }) {
+  constructor({ authority, approve = async () => false, approvals = new ActionApprovalStore(), receipts = null, owners, home, flow = null, onFlow = null, logger = console }) {
     this.authority = authority;
+    this.flow = flow;
+    this.onFlow = onFlow;
     this.approve = approve;
     this.approvals = approvals;
     this.receipts = receipts;
@@ -39,6 +51,10 @@ class ActionGate {
       new SensitivePathCheck({ home, protectedPaths }),
       new ExecutionOwnerCheck(owners),
     ]);
+  }
+
+  flowCovers(request) {
+    try { return Boolean(this.flow?.covers(request.actionId)); } catch { return false; }
   }
 
   describeTarget(request) {
@@ -66,16 +82,24 @@ class ActionGate {
       // anyway (credential path, outside the boundary, wrong owner).
       const precheck = this.sentinel.evaluate(request, new AuthorityDecision(true, 'precheck', 'precheck', request.digest));
       if (precheck.allowed) {
-        let yes = false;
-        try {
-          yes = await this.approve({ command_id: commandId, params, action_id: request.actionId, target: request.target, digest: request.digest });
-        } catch (error) {
-          this.logger.error(`[muse-node] approval dialog failed: ${error.message}`);
+        const ask = { command_id: commandId, params, action_id: request.actionId, target: request.target, digest: request.digest };
+        let answer = { approved: false, channel: null };
+        if (decision.reason === FLOW_REASON && this.flowCovers(request)) {
+          // Flow answers only "granted here, but ask first"; never a missing grant.
+          answer = { approved: true, channel: 'flow' };
+        } else {
+          try {
+            answer = normalizeAnswer(await this.approve(ask));
+          } catch (error) {
+            this.logger.error(`[muse-node] approval dialog failed: ${error.message}`);
+          }
         }
-        if (yes === true) {
-          const token = this.approvals.issue(request, { ttlMs: 60000, mode: 'user' });
+        if (answer.approved === true) {
+          const flowed = answer.channel === 'flow';
+          const token = this.approvals.issue(request, { ttlMs: 60000, mode: flowed ? 'delegated' : 'user' });
           decision = this.authority.evaluate(request, { approvals: this.approvals, approval: token });
-          approval = 'user';
+          approval = flowed ? 'flow' : answer.channel ? `user:${answer.channel}` : 'user';
+          if (flowed && decision.allowed) { try { this.onFlow?.(ask); } catch {} }
         } else {
           decision = new AuthorityDecision(false, '', 'the user did not approve this action', request.digest);
         }
@@ -100,4 +124,4 @@ class ActionGate {
   }
 }
 
-module.exports = { ActionGate, CONSENT_REASONS };
+module.exports = { ActionGate, CONSENT_REASONS, FLOW_REASON };

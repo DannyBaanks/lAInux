@@ -57,6 +57,55 @@ modelo pueda darse permisos a sí mismo. Los recibos guardan la ruta, la
 decisión y un hash del resultado; **no** guardan el contenido de archivos ni
 la salida de comandos (los comandos van como hash + vista previa recortada).
 
+## Aprobar desde el celular (Telegram)
+
+Las aprobaciones llegan **a la vez** al diálogo de la PC y a tu chat privado
+con tu bot de Telegram; vale la primera respuesta (un «Rechazar» es tan
+definitivo como un «Permitir»). Sin respuesta en 110 s = rechazado.
+
+Vincular (una vez, en tu terminal):
+
+1. En Telegram, abre **@BotFather**, envía `/newbot` y copia el token.
+2. `muse-node telegram pair` → pega el token (no se ve; va al keyring, no a
+   un archivo) → envía al bot el `/pair <pin>` que te muestra → confirma que
+   es tu cuenta.
+3. `systemctl --user restart muse-node.service`
+
+Probar sin ejecutar nada: para el daemon y corre `muse-node telegram test`.
+Otros: `muse-node telegram status` · `muse-node telegram unpair`.
+
+Por qué no por el chat de Muse ni WhatsApp: esos mensajes los lee el modelo,
+y lo que el modelo diga no puede contar como tu permiso. El bot solo hace
+caso a tu usuario en tu chat privado; cada botón vale una sola vez, para esa
+petición exacta (su huella) y caduca. Telegram ve la vista previa de la
+petición; los textos con pinta de secreto se ocultan antes de enviarla.
+
+En el chat del bot:
+
+| Mensaje | Qué hace |
+|---|---|
+| `/estado` | En línea, bloqueo, Flow y peticiones pendientes |
+| `/flow 30` · `/flow 2h` | Flow de escritura por ese tiempo |
+| `/flow 30 terminal` | Flow que también cubre comandos (ver aviso) |
+| `/flow off` | Volver a pedir permiso |
+| `/bloquear` | Pánico: todo se niega salvo ping. **Desbloquear solo en la PC** (`muse-node unlock`) |
+
+## Modo Flow (no pedir permiso un rato)
+
+`muse-node flow on 30m` (o `2h`, máx. 8 h) · `muse-node flow off` ·
+`muse-node flow status` · o el botón **⚡ Permitir + Flow 30 min**.
+
+- Solo se salta la pregunta **dentro de carpetas ya autorizadas**:
+  `muse-node grant write ~/Documents` (y `grant shell <carpeta>` para comandos).
+  Fuera de ellas sigue preguntando; `~/.ssh`, credenciales y el estado de
+  muse-node siguen negados siempre.
+- Por defecto cubre escribir archivos y crear carpetas. Los comandos solo con
+  `flow on 30m --shell` o `/flow 30 terminal`. **Aviso:** un comando corre
+  con todo tu poder de usuario, así que en Flow de terminal el modelo podría
+  hacer cualquier cosa que tú puedas (incluso alargar Flow). Úsalo corto.
+- Cada acción en Flow deja recibo con `approval: "flow"` y te avisa por
+  Telegram (`⚡ Flow: …`). Caduca solo.
+
 ## Comandos de shell
 
 Se ejecutan con `bash --noprofile --norc` y un entorno mínimo (PATH, HOME,

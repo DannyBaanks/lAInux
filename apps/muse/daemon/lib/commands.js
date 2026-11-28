@@ -356,7 +356,7 @@ function shellExec(params, { graceMs = KILL_GRACE_MS } = {}) {
 
 function createCommandRegistry({
   approve = async () => false, authority = new WorkspaceAuthority(), approvals = new ActionApprovalStore(),
-  receipts = null, logger = console,
+  receipts = null, flow = null, onFlow = null, logger = console,
 } = {}) {
   const definitions = {
     ping: schema('Connection liveness check'),
@@ -410,7 +410,7 @@ function createCommandRegistry({
     }),
   };
   const home = os.homedir();
-  const gate = new ActionGate({ authority, approve, approvals, receipts, owners: OWNERS, home, logger });
+  const gate = new ActionGate({ authority, approve, approvals, receipts, owners: OWNERS, home, flow, onFlow, logger });
   const commands = {
     ping: { build: () => ({ actionId: 'node.ping' }), run: async () => ({ ok: true, platform: 'linux', hostname: os.hostname(), timestamp: new Date().toISOString() }) },
     'system.which': {

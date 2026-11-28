@@ -43,41 +43,58 @@ function describe({ command_id: commandId, params = {}, action_id: actionId, tar
   return { title: 'Muse pide permiso', body: `${commandId}\n${preview(JSON.stringify(params, null, 2))}` };
 }
 
-function createZenityApprover({ timeoutMs = 110000, spawnImpl = spawn, env = process.env, logger = console } = {}) {
-  return function approve(request) {
-    if (!env.DISPLAY && !env.WAYLAND_DISPLAY) {
-      logger.error(`[muse-node] approval ${request.command_id}: no graphical display, denied`);
-      return Promise.resolve(false);
-    }
-    const { title, body: details } = describe(request);
-    // The short digest names the exact immutable request this yes applies to.
-    const body = request.digest ? `${details}\n\nHuella de la petición: ${request.digest.slice(0, 12)}` : details;
-    return new Promise((resolve) => {
-      let settled = false;
-      const done = (approved, reason) => {
-        if (settled) return;
-        settled = true;
-        logger.log(`[muse-node] approval ${request.command_id}: ${approved ? 'approved' : `denied (${reason})`}`);
-        resolve(approved);
-      };
-      let child;
-      try {
-        child = spawnImpl('zenity', [
-          // --default-cancel: a stray Enter/Space must deny, never approve.
-          '--question', '--no-markup', '--default-cancel', '--width=520',
-          `--title=${title}`, `--text=${title}\n\n${body}`,
-          '--ok-label=Permitir', '--cancel-label=Rechazar',
-          `--timeout=${Math.ceil(timeoutMs / 1000)}`,
-        ], { env, stdio: 'ignore' });
-      } catch (error) {
-        done(false, error.message);
-        return;
+// Approval Broker channel. ask() -> true (Permitir), false (Rechazar or the
+// window closed), null (could not ask: no display, no zenity, timeout, or the
+// broker cancelled it because another channel answered first).
+function createZenityChannel({ timeoutMs = 110000, spawnImpl = spawn, env = process.env, logger = console } = {}) {
+  return {
+    name: 'desktop',
+    available: () => Boolean(env.DISPLAY || env.WAYLAND_DISPLAY),
+    ask(request, { signal } = {}) {
+      if (!env.DISPLAY && !env.WAYLAND_DISPLAY) {
+        logger.error(`[muse-node] approval ${request.command_id}: no graphical display`);
+        return Promise.resolve(null);
       }
-      child.on('error', (error) => done(false, error.message));
-      // zenity: 0 = OK, 1 = cancel/close, 5 = timeout
-      child.on('exit', (code) => done(code === 0, code === 5 ? 'timeout' : `exit ${code}`));
-    });
+      const { title, body: details } = describe(request);
+      // The short digest names the exact immutable request this yes applies to.
+      const body = request.digest ? `${details}\n\nHuella de la petición: ${request.digest.slice(0, 12)}` : details;
+      return new Promise((resolve) => {
+        let settled = false;
+        let child;
+        const done = (answer, reason) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', cancel);
+          logger.log(`[muse-node] desktop approval ${request.command_id}: ${answer === true ? 'approved' : answer === false ? 'rejected' : `no answer (${reason})`}`);
+          resolve(answer);
+        };
+        function cancel() { try { child?.kill('SIGTERM'); } catch {} done(null, 'answered elsewhere'); }
+        if (signal?.aborted) { done(null, 'cancelled'); return; }
+        try {
+          child = spawnImpl('zenity', [
+            // --default-cancel: a stray Enter/Space must deny, never approve.
+            '--question', '--no-markup', '--default-cancel', '--width=520',
+            `--title=${title}`, `--text=${title}\n\n${body}`,
+            '--ok-label=Permitir', '--cancel-label=Rechazar',
+            `--timeout=${Math.ceil(timeoutMs / 1000)}`,
+          ], { env, stdio: 'ignore' });
+        } catch (error) {
+          done(null, error.message);
+          return;
+        }
+        signal?.addEventListener('abort', cancel, { once: true });
+        child.on('error', (error) => done(null, error.message));
+        // zenity: 0 = OK, 1 = cancel/close, 5 = timeout
+        child.on('exit', (code) => done(code === 0 ? true : code === 1 ? false : null, code === 5 ? 'timeout' : `exit ${code}`));
+      });
+    },
   };
 }
 
-module.exports = { createZenityApprover, describe };
+// Single-channel boolean approver (no answer = no).
+function createZenityApprover(options = {}) {
+  const channel = createZenityChannel(options);
+  return async (request) => (await channel.ask(request)) === true;
+}
+
+module.exports = { createZenityApprover, createZenityChannel, describe, preview };

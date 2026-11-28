@@ -15,7 +15,14 @@ const { ReceiptLog } = require('../lib/receipts');
 
 function receiptsFile() { return path.join(defaultStateDirectory(), 'receipts', 'muse-node.jsonl'); }
 const { MuseNodeService } = require('../lib/node-service');
-const { createZenityApprover } = require('../lib/approval');
+const { createZenityChannel } = require('../lib/approval');
+const { createApprovalBroker } = require('../lib/approval-broker');
+const { FlowMode, parseMinutes } = require('../lib/flow');
+const telegram = require('../lib/telegram');
+const keyring = require('../lib/keyring');
+
+const TELEGRAM_ACCOUNT = 'telegram-bot-token';
+function flowFile() { return path.join(defaultStateDirectory(), 'flow.json'); }
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
 
 async function openGateway(profile, { cold = false } = {}) {
@@ -172,6 +179,18 @@ async function start(profile, options = {}) {
   // re-read on every decision, so `muse-node revoke/lock` apply immediately.
   const authority = new WorkspaceAuthority();
   const receipts = new ReceiptLog({ file: receiptsFile() });
+  const flow = new FlowMode({ file: flowFile() });
+  // Approval channels the model cannot reach: the desktop dialog and, when
+  // paired, the private Telegram chat. First explicit answer wins.
+  const channels = [createZenityChannel()];
+  const phone = openTelegramChannel({ flow, authority });
+  if (phone) channels.push(phone.start());
+  const approve = createApprovalBroker({ channels });
+  const onFlow = (ask) => {
+    const target = ask.command_id === 'shell.exec' ? `$ ${String(ask.params?.command ?? '').slice(0, 300)}` : ask.target;
+    console.log(`[muse-node] flow: ${ask.command_id} approved by Flow mode`);
+    phone?.notify(`⚡ Flow: ${ask.command_id}\n${target}`);
+  };
   let stopping = false;
   let wake = null;
   let dropSession = null;
@@ -189,7 +208,7 @@ async function start(profile, options = {}) {
     try {
       session = await openGateway(profile, options);
       const { identity, connection, rpc } = session;
-      const registry = createCommandRegistry({ approve: createZenityApprover(), authority, receipts });
+      const registry = createCommandRegistry({ approve, authority, receipts, flow, onFlow });
       const service = new MuseNodeService({ rpc, identity, registry, ledger, status });
       session.service = service;
       const ended = new Promise((resolve) => {
@@ -221,9 +240,96 @@ async function start(profile, options = {}) {
     await new Promise((resolve) => { wake = resolve; setTimeout(resolve, delay); });
     backoffMs = Math.min(backoffMs * 2, 60000);
   }
+  await phone?.stop();
   const killed = killAllProcessGroups('SIGTERM');
   if (killed) console.error(`[muse-node] stopping: sent SIGTERM to ${killed} shell.exec process group(s)`);
   status.transition('DISCONNECTED', 'daemon stopped');
+}
+
+function telegramTransport() {
+  let cached = null;
+  return new telegram.TelegramTransport({ token: () => (cached ??= keyring.getSecret(TELEGRAM_ACCOUNT)) });
+}
+
+// Paired private chat -> approval channel; anything missing -> desktop only.
+function openTelegramChannel({ flow, authority }) {
+  let peer;
+  try { peer = telegram.readPeer(); } catch (error) { console.error(`[muse-node] telegram: ${error.message}; desktop approvals only`); return null; }
+  if (!peer) { console.log('[muse-node] telegram: not paired (muse-node telegram pair); desktop approvals only'); return null; }
+  return new telegram.TelegramApprovals({ transport: telegramTransport(), peer, flow, authority });
+}
+
+function prompt(question, { hidden = false } = {}) {
+  const readline = require('node:readline');
+  return new Promise((resolve, reject) => {
+    if (!process.stdin.isTTY) { reject(new Error('this step needs an interactive terminal')); return; }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    if (hidden) rl._writeToOutput = (text) => { if (text.includes(question)) process.stdout.write(text); };
+    rl.question(question, (answer) => { rl.close(); if (hidden) process.stdout.write('\n'); resolve(answer.trim()); });
+  });
+}
+
+async function telegramCommand(sub, args) {
+  if (sub === 'pair') {
+    console.log('1) En Telegram abre @BotFather, envía /newbot y copia el token que te da.');
+    const token = await prompt('2) Pega aquí el token (no se ve, no se guarda en archivos): ', { hidden: true });
+    if (!telegram.TOKEN.test(token)) throw new Error('eso no parece un token de BotFather');
+    const transport = new telegram.TelegramTransport({ token: () => token });
+    const bot = await transport.getMe();
+    await transport.ensurePolling();
+    const pin = require('node:crypto').randomBytes(4).toString('hex');
+    console.log(`3) Abre https://t.me/${bot.username} y envíale exactamente:\n\n     /pair ${pin}\n\n   (tienes 3 minutos)`);
+    const who = await telegram.waitForPairing(transport, pin);
+    const ok = await prompt(`Recibido de ${who.name || '?'}${who.username ? ` (@${who.username})` : ''}, id ${who.userId}. ¿Es tu cuenta? [s/N] `);
+    if (!/^s(i|í)?$/i.test(ok)) throw new Error('vinculación cancelada');
+    keyring.setSecret(TELEGRAM_ACCOUNT, token);
+    const peer = new telegram.Peer({ bot_id: bot.id, user_id: who.userId, chat_id: who.userId });
+    telegram.writePeer(peer);
+    await transport.send(peer.chatId, `✅ Vinculado con muse-node en ${require('node:os').hostname()}.\nAquí te llegarán las aprobaciones. Escribe /estado para ver las opciones.`).catch(() => {});
+    console.log(`Vinculado: bot @${bot.username} ↔ tu chat privado. Token en el keyring, vínculo en ${telegram.defaultPeerFile()}.`);
+    console.log('Reinicia el daemon para usarlo:  systemctl --user restart muse-node.service');
+  } else if (sub === 'status') {
+    const peer = telegram.readPeer();
+    if (!peer) { console.log('telegram: no vinculado (muse-node telegram pair)'); return; }
+    const bot = await telegramTransport().getMe();
+    console.log(JSON.stringify({ paired: true, bot: `@${bot.username}`, bot_id: peer.botId, user_id: peer.userId, peer_file: telegram.defaultPeerFile() }, null, 2));
+  } else if (sub === 'unpair') {
+    try { fs.unlinkSync(telegram.defaultPeerFile()); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    keyring.deleteSecret(TELEGRAM_ACCOUNT);
+    console.log('telegram desvinculado (token borrado del keyring). Reinicia el daemon.');
+  } else if (sub === 'test') {
+    // Sends a sample approval that executes NOTHING, to check the buttons.
+    const peer = telegram.readPeer();
+    if (!peer) throw new Error('no vinculado: muse-node telegram pair');
+    const phone = new telegram.TelegramApprovals({ transport: telegramTransport(), peer, ttlMs: 110000 });
+    phone.start();
+    for (let i = 0; i < 50 && !phone.available(); i++) await new Promise((resolve) => setTimeout(resolve, 200));
+    if (!phone.available()) { await phone.stop(); throw new Error('Telegram no responde (¿otro proceso está leyendo el bot? para el daemon antes del test)'); }
+    const digest = require('node:crypto').createHash('sha256').update(`test ${Date.now()}`).digest('hex');
+    console.log('Mensaje de prueba enviado: pulsa Permitir o Rechazar en el celular (110 s)…');
+    const answer = await phone.ask({ command_id: 'shell.exec', params: { command: 'echo "prueba de aprobación: no se ejecuta nada"', cwd: '~' }, digest });
+    await phone.stop();
+    console.log(`respuesta: ${answer === null ? 'sin respuesta (caducó)' : JSON.stringify(answer)}`);
+  } else {
+    throw new Error('usage: muse-node telegram pair|status|test|unpair');
+  }
+}
+
+function flowCommand(sub, args) {
+  const flow = new FlowMode({ file: flowFile() });
+  if (sub === 'on') {
+    const shell = args.includes('--shell');
+    const state = flow.enable(parseMinutes(args.find((arg) => !arg.startsWith('--')) ?? '30'), 'terminal', shell ? 'all' : 'write');
+    console.log(`Flow ON (${state.scope === 'all' ? 'escritura + terminal' : 'escritura'}) hasta ${state.until}: sin pedir permiso DENTRO de las carpetas ya autorizadas (muse-node policy). Credenciales siguen negadas. Apagar: muse-node flow off`);
+    if (shell) console.log('AVISO: con --shell, un comando aprobado por Flow corre con todo tu poder de usuario.');
+  } else if (sub === 'off') {
+    flow.disable();
+    console.log('Flow OFF: vuelvo a pedir permiso.');
+  } else if (!sub || sub === 'status') {
+    console.log(JSON.stringify(flow.status()));
+  } else {
+    throw new Error('usage: muse-node flow on [30m|2h] [--shell] | off | status');
+  }
 }
 
 // Operator commands. They run in the operator's terminal, never through a
@@ -277,6 +383,8 @@ async function main() {
     return;
   }
   if (command === 'status') return printStatus();
+  if (command === 'telegram') return telegramCommand(process.argv[3], process.argv.slice(4));
+  if (command === 'flow') return flowCommand(process.argv[3], process.argv.slice(4));
   if (['policy', 'grant', 'revoke', 'lock', 'unlock', 'receipts'].includes(command)) return authorityCommand(command, process.argv.slice(3));
   const options = { cold: process.argv.includes('--cold'), stayMs: stayMs() };
   if (command === 'probe') return probe(profile, options);
