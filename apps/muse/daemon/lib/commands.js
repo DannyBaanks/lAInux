@@ -232,25 +232,70 @@ function which(params) {
   return { ok: false, error_code: 'not_found', message: `${name} was not found on PATH` };
 }
 
-function shellExec(params) {
+// Every shell.exec runs as the leader of its own process group so a timeout,
+// a cancel or daemon shutdown signals the whole tree (bash and whatever it
+// started: sha256sum, cp, du...), not just bash. Killing only bash left
+// grandchildren holding stdout open, so 'close' never fired.
+const activeGroups = new Set();
+const KILL_GRACE_MS = 2000;
+
+function signalGroup(pgid, signal) {
+  try { process.kill(-pgid, signal); return true; } catch { return false; }
+}
+
+function terminateGroup(pgid, graceMs = KILL_GRACE_MS) {
+  if (!signalGroup(pgid, 'SIGTERM')) return;
+  setTimeout(() => signalGroup(pgid, 'SIGKILL'), graceMs).unref();
+}
+
+function killAllProcessGroups(signal = 'SIGTERM') {
+  for (const pgid of activeGroups) signalGroup(pgid, signal);
+  return activeGroups.size;
+}
+
+function shellExec(params, { graceMs = KILL_GRACE_MS } = {}) {
   if (typeof params.command !== 'string' || !params.command.trim()) {
     throw Object.assign(new Error('command is required'), { code: 'invalid_argument' });
   }
   const cwd = params.cwd ? expandPath(params.cwd) : os.homedir();
   const timeout = boundedInteger(params.timeout_ms, 30000, 100, 120000, 'timeout_ms');
   return new Promise((resolve) => {
-    const child = spawn('/bin/bash', ['-lc', params.command], { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('/bin/bash', ['-lc', params.command], { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const pgid = child.pid;
+    if (pgid) activeGroups.add(pgid);
     let stdout = '';
     let stderr = '';
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeout);
+    let settled = false;
+    let exitInfo = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(drain);
+      if (pgid) { signalGroup(pgid, 'SIGKILL'); activeGroups.delete(pgid); }
+      resolve(value);
+    };
+    const report = () => finish({
+      ok: !timedOut && exitInfo?.code === 0,
+      exit_code: exitInfo?.code ?? null,
+      signal: exitInfo?.signal ?? null,
+      timed_out: timedOut,
+      stdout: stdout.slice(0, 1048576),
+      stderr: stderr.slice(0, 1048576),
+    });
+    let drain = null;
+    const timer = setTimeout(() => { timedOut = true; if (pgid) terminateGroup(pgid, graceMs); }, timeout);
     child.stdout.on('data', (data) => { if (stdout.length < 1048576) stdout += data.toString(); });
     child.stderr.on('data', (data) => { if (stderr.length < 1048576) stderr += data.toString(); });
-    child.on('error', (error) => { clearTimeout(timer); resolve({ ok: false, error_code: 'spawn_failed', message: error.message }); });
-    child.on('close', (exitCode, signal) => {
-      clearTimeout(timer);
-      resolve({ ok: !timedOut && exitCode === 0, exit_code: exitCode, signal, timed_out: timedOut, stdout: stdout.slice(0, 1048576), stderr: stderr.slice(0, 1048576) });
+    child.on('error', (error) => finish({ ok: false, error_code: 'spawn_failed', message: error.message }));
+    // 'exit' = bash is gone. A background grandchild can keep the pipes open,
+    // so give 'close' a short drain window, then reap the group and report.
+    child.on('exit', (code, signal) => {
+      exitInfo = { code, signal };
+      drain = setTimeout(report, timedOut ? 0 : 500);
     });
+    child.on('close', (code, signal) => { exitInfo = exitInfo ?? { code, signal }; report(); });
   });
 }
 
@@ -335,4 +380,4 @@ function createCommandRegistry({ approve = async () => false } = {}) {
   };
 }
 
-module.exports = { createCommandRegistry, expandPath, listFiles, searchFiles, readFile, which };
+module.exports = { createCommandRegistry, expandPath, listFiles, searchFiles, readFile, which, shellExec, killAllProcessGroups, activeGroups };

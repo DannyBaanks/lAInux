@@ -6,7 +6,10 @@ const { brokerRequest } = require('../../client/broker');
 const { JsonStreamParser } = require('../lib/json-stream');
 const { connectPrimaryGateway } = require('../lib/primary');
 const { NoiseRpcClient } = require('../lib/rpc');
-const { createCommandRegistry } = require('../lib/commands');
+const fs = require('node:fs');
+const { createCommandRegistry, killAllProcessGroups } = require('../lib/commands');
+const { InvokeLedger } = require('../lib/invoke-ledger');
+const { NodeStatus, defaultStatusPath } = require('../lib/node-state');
 const { MuseNodeService } = require('../lib/node-service');
 const { createZenityApprover } = require('../lib/approval');
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
@@ -147,45 +150,77 @@ async function nodes(profile, options = {}) {
   }
 }
 
-// Long-running node: one gateway session at a time; when the gateway closes
-// the socket (idle, redeploy, protocol error) reconnect with capped backoff so
-// Muse never sees the computer go silent for good.
+// Long-running node: one gateway session at a time. A session ends when the
+// socket closes OR the service reports it lost (subscription stream ended,
+// heartbeats failing, capabilities not accepted): an open socket alone is not
+// "online". Reconnect with capped exponential backoff plus jitter. Invocations
+// live in a process-wide ledger so a redelivery after reconnect replays the
+// stored result instead of running the command twice.
+//   SIGUSR2  drop the current gateway session on purpose (reconnect test)
+function backoffWithJitter(baseMs, random = Math.random) {
+  return Math.round(baseMs / 2 + random() * baseMs / 2);
+}
+
 async function start(profile, options = {}) {
+  const status = new NodeStatus();
+  const ledger = new InvokeLedger();
   let stopping = false;
   let wake = null;
-  const stop = () => { stopping = true; wake?.(); };
+  let dropSession = null;
+  const stop = () => { stopping = true; wake?.(); dropSession?.('daemon stopping'); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  process.on('SIGUSR2', () => {
+    console.error('[muse-node] SIGUSR2: dropping the gateway session on purpose');
+    dropSession?.('SIGUSR2 controlled disconnect');
+  });
   let backoffMs = 1000;
   while (!stopping) {
     let session = null;
+    let reason = 'unknown';
     try {
       session = await openGateway(profile, options);
       const { identity, connection, rpc } = session;
       const registry = createCommandRegistry({ approve: createZenityApprover() });
-      const service = new MuseNodeService({ rpc, identity, registry });
+      const service = new MuseNodeService({ rpc, identity, registry, ledger, status });
       session.service = service;
-      const closed = new Promise((resolve) => {
-        wake = resolve;
-        connection.ws.addEventListener('close', resolve, { once: true });
+      const ended = new Promise((resolve) => {
+        dropSession = resolve;
+        connection.ws.addEventListener('close', () => resolve(`gateway closed: ${JSON.stringify(connection.closeInfo)}`), { once: true });
+        service.lost.then(resolve);
       });
+      wake = () => dropSession?.('daemon stopping');
       const { registration } = await service.start();
       console.log(`[muse-node] online as ${identity.displayName}: ${JSON.stringify(registration)}`);
       console.log(`[muse-node] commands: ${Object.keys(registry.definitions).join(', ')}`);
-      backoffMs = 1000;
-      await closed;
-      if (!stopping) console.error(`[muse-node] gateway closed: ${JSON.stringify(connection.closeInfo)}; reconnecting`);
+      if (status.state === 'READY') backoffMs = 1000;
+      reason = await ended;
     } catch (error) {
-      console.error(`[muse-node] session failed: ${error.message}`);
+      reason = `session failed: ${error.message}`;
+      status.error(reason);
     } finally {
+      dropSession = null;
       await session?.service?.close();
       session?.rpc.close();
       session?.connection.close();
     }
     if (stopping) break;
-    await new Promise((resolve) => { wake = resolve; setTimeout(resolve, backoffMs); });
+    console.error(`[muse-node] ${reason}; reconnecting`);
+    if (['CONNECTING', 'REGISTERED', 'READY'].includes(status.state)) status.transition('DEGRADED', reason);
+    status.transition('RECONNECTING', reason);
+    const delay = backoffWithJitter(backoffMs);
+    console.error(`[muse-node] reconnect in ${delay} ms (${ledger.running} command(s) still running)`);
+    await new Promise((resolve) => { wake = resolve; setTimeout(resolve, delay); });
     backoffMs = Math.min(backoffMs * 2, 60000);
   }
+  const killed = killAllProcessGroups('SIGTERM');
+  if (killed) console.error(`[muse-node] stopping: sent SIGTERM to ${killed} shell.exec process group(s)`);
+  status.transition('DISCONNECTED', 'daemon stopped');
+}
+
+function printStatus() {
+  try { process.stdout.write(fs.readFileSync(defaultStatusPath(), 'utf8')); }
+  catch (error) { console.error(`[muse-node] no status yet (${error.code ?? error.message}): is the daemon running?`); process.exitCode = 1; }
 }
 
 function stayMs() {
@@ -201,6 +236,7 @@ async function main() {
     console.log(JSON.stringify({ nodeId: identity.nodeId, displayName: identity.displayName, platform: identity.platform, profile: path.join(profile, 'node-identity.json') }, null, 2));
     return;
   }
+  if (command === 'status') return printStatus();
   const options = { cold: process.argv.includes('--cold'), stayMs: stayMs() };
   if (command === 'probe') return probe(profile, options);
   if (command === 'register') return register(profile, options);
