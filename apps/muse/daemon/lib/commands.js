@@ -4,6 +4,21 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { ActionRequest, canonicalJson, sha256 } = require('./security');
+const { WorkspaceAuthority, WorkspaceAuthorityError, ActionApprovalStore } = require('./workspace-authority');
+const { ActionGate } = require('./action-gate');
+
+// Registered execution owner per action (checked by the ExecutionOwner
+// Check): a request built for one owner cannot run through another.
+const OWNERS = Object.freeze({
+  'node.ping': 'muse-node.system',
+  'node.system.which': 'muse-node.system',
+  'workspace.files.list': 'muse-node.files',
+  'workspace.files.read': 'muse-node.files',
+  'workspace.files.search': 'muse-node.files',
+  'workspace.files.write': 'muse-node.files',
+  'workspace.command.run': 'muse-node.shell',
+});
 
 const IMAGE_TYPES = new Map([
   ['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'],
@@ -143,7 +158,9 @@ function searchFiles(params) {
       scanned += 1;
       let stat;
       try { stat = fs.statSync(fullPath); } catch { partial = true; continue; }
-      const isFolder = stat.isDirectory();
+      // Recurse only into real folders: a symlinked folder may point outside
+      // the granted path (e.g. at ~/.ssh).
+      const isFolder = stat.isDirectory() && !child.isSymbolicLink();
       const matches = globMatch(child.name, query)
         && (kind === 'any' || (kind === 'folder' ? isFolder : !isFolder))
         && (!extension || (!isFolder && path.extname(child.name).slice(1).toLowerCase() === extension));
@@ -201,22 +218,51 @@ function readFile(params) {
   };
 }
 
-function writeFile(params) {
-  const filePath = expandPath(params.path);
-  if (typeof params.content !== 'string' || params.vm_path !== undefined) {
-    throw Object.assign(new Error('files.write currently requires UTF-8 content and no vm_path'), { code: 'invalid_argument' });
-  }
-  if (!fs.statSync(path.dirname(filePath), { throwIfNoEntry: false })?.isDirectory()) {
-    throw Object.assign(new Error('Parent folder does not exist; use files.mkdir'), { code: 'parent_not_found' });
-  }
-  fs.writeFileSync(filePath, params.content, 'utf8');
-  return { ok: true, path: filePath, bytes_written: Buffer.byteLength(params.content) };
+// Snapshot of a target taken when the request is built. It is part of the
+// approved digest; the owner re-takes it right before the effect and refuses
+// if the file changed between approval and execution.
+function fingerprint(target) {
+  let info;
+  try { info = fs.lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return { exists: false }; throw error; }
+  const snapshot = { exists: true, kind: info.isDirectory() ? 'folder' : info.isFile() ? 'file' : 'other', size: info.size, mtime_ms: Math.trunc(info.mtimeMs) };
+  if (info.isFile() && info.size <= 8 * 1024 * 1024) snapshot.sha256 = sha256(fs.readFileSync(target));
+  return snapshot;
 }
 
-function makeDirectory(params) {
-  const folder = expandPath(params.path);
-  fs.mkdirSync(folder, { recursive: params.create_intermediates === true });
-  return { ok: true, path: folder, created: true };
+function unchanged(request) {
+  if (canonicalJson(fingerprint(request.target)) !== canonicalJson(request.parameters.expected)) {
+    throw Object.assign(new Error('The target changed after it was approved; ask again'), { code: 'target_changed' });
+  }
+}
+
+function writeFileOwner(request, content) {
+  if (typeof content !== 'string' || sha256(content) !== request.parameters.content_sha256) {
+    throw Object.assign(new Error('Content differs from the approved request'), { code: 'request_mismatch' });
+  }
+  if (!fs.statSync(path.dirname(request.target), { throwIfNoEntry: false })?.isDirectory()) {
+    throw Object.assign(new Error('Parent folder does not exist; use files.mkdir'), { code: 'parent_not_found' });
+  }
+  unchanged(request);
+  // O_NOFOLLOW: a symlink swapped in after approval is refused, not followed.
+  const fd = fs.openSync(request.target, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o644);
+  try { fs.writeSync(fd, content); } finally { fs.closeSync(fd); }
+  return { ok: true, path: request.target, bytes_written: Buffer.byteLength(content) };
+}
+
+function makeDirectoryOwner(request) {
+  unchanged(request);
+  fs.mkdirSync(request.target, { recursive: request.parameters.create_intermediates === true });
+  return { ok: true, path: request.target, created: true };
+}
+
+function pick(params, keys) {
+  return Object.fromEntries(keys.filter((key) => params[key] !== undefined).map((key) => [key, params[key]]));
+}
+
+// What the approval dialog shows: the real request, with file content kept
+// for the preview (it is not part of the digest; its hash is).
+function previewParams(commandId, params) {
+  return commandId === 'files.write' ? { path: params.path, content: params.content } : params;
 }
 
 function which(params) {
@@ -237,6 +283,15 @@ function which(params) {
 // started: sha256sum, cp, du...), not just bash. Killing only bash left
 // grandchildren holding stdout open, so 'close' never fired.
 const activeGroups = new Set();
+// No login profile and no inherited secrets: tokens exported by the desktop
+// session (API keys, agent sockets) never reach a model-requested command.
+const SHELL_ARGV = ['/bin/bash', '--noprofile', '--norc', '-c'];
+const ENV_ALLOW = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'TZ', 'TMPDIR'];
+function minimalEnv(source = process.env) {
+  const env = { TERM: 'dumb', SHELL: '/bin/bash' };
+  for (const key of ENV_ALLOW) if (source[key] !== undefined) env[key] = source[key];
+  return env;
+}
 const KILL_GRACE_MS = 2000;
 
 function signalGroup(pgid, signal) {
@@ -260,7 +315,7 @@ function shellExec(params, { graceMs = KILL_GRACE_MS } = {}) {
   const cwd = params.cwd ? expandPath(params.cwd) : os.homedir();
   const timeout = boundedInteger(params.timeout_ms, 30000, 100, 120000, 'timeout_ms');
   return new Promise((resolve) => {
-    const child = spawn('/bin/bash', ['-lc', params.command], { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawn(SHELL_ARGV[0], [...SHELL_ARGV.slice(1), params.command], { cwd, env: minimalEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     const pgid = child.pid;
     if (pgid) activeGroups.add(pgid);
     let stdout = '';
@@ -299,7 +354,10 @@ function shellExec(params, { graceMs = KILL_GRACE_MS } = {}) {
   });
 }
 
-function createCommandRegistry({ approve = async () => false } = {}) {
+function createCommandRegistry({
+  approve = async () => false, authority = new WorkspaceAuthority(), approvals = new ActionApprovalStore(),
+  receipts = null, logger = console,
+} = {}) {
   const definitions = {
     ping: schema('Connection liveness check'),
     'system.which': schema("Find a command-line tool's full path on this Linux computer's PATH; runs nothing.", {
@@ -351,33 +409,87 @@ function createCommandRegistry({ approve = async () => false } = {}) {
       }, permissions: ['shell'], timeoutMs: 240000,
     }),
   };
-  const handlers = {
-    ping: async () => ({ ok: true, platform: 'linux', hostname: os.hostname(), timestamp: new Date().toISOString() }),
-    'system.which': async (params) => which(params),
-    'files.list': async (params) => listFiles(params),
-    'files.search': async (params) => searchFiles(params),
-    'files.read': async (params) => readFile(params),
-    'files.write': async (params) => writeFile(params),
-    'files.mkdir': async (params) => makeDirectory(params),
-    'shell.exec': async (params) => shellExec(params),
+  const home = os.homedir();
+  const gate = new ActionGate({ authority, approve, approvals, receipts, owners: OWNERS, home, logger });
+  const commands = {
+    ping: { build: () => ({ actionId: 'node.ping' }), run: async () => ({ ok: true, platform: 'linux', hostname: os.hostname(), timestamp: new Date().toISOString() }) },
+    'system.which': {
+      build: (params) => ({ actionId: 'node.system.which', target: String(params.name ?? '') }),
+      run: async (request) => which({ name: request.target }),
+    },
+    'files.list': {
+      build: (params) => {
+        assertParams(params, LIST_PARAMS);
+        return { actionId: 'workspace.files.list', target: authority.canonicalPath(params.path ?? '~'), parameters: pick(params, ['sort', 'limit', 'offset']) };
+      },
+      run: async (request) => listFiles({ ...request.parameters, path: request.target }),
+    },
+    'files.search': {
+      build: (params) => ({ actionId: 'workspace.files.search', target: authority.canonicalPath(params.path ?? '~'), parameters: pick(params, ['query', 'recursive', 'kind', 'extension', 'sort', 'limit', 'offset']) }),
+      run: async (request) => searchFiles({ ...request.parameters, path: request.target }),
+    },
+    'files.read': {
+      build: (params) => ({ actionId: 'workspace.files.read', target: authority.canonicalPath(params.path), parameters: pick(params, ['offset', 'limit']) }),
+      run: async (request) => readFile({ ...request.parameters, path: request.target }),
+    },
+    'files.write': {
+      build: (params) => {
+        if (typeof params.content !== 'string' || params.vm_path !== undefined) {
+          throw Object.assign(new Error('files.write currently requires UTF-8 content and no vm_path'), { code: 'invalid_argument' });
+        }
+        const target = authority.canonicalPath(params.path);
+        return {
+          actionId: 'workspace.files.write', target,
+          parameters: { op: 'write', content_sha256: sha256(params.content), bytes: Buffer.byteLength(params.content), expected: fingerprint(target) },
+        };
+      },
+      run: async (request, params) => writeFileOwner(request, params.content),
+    },
+    'files.mkdir': {
+      build: (params) => {
+        const target = authority.canonicalPath(params.path);
+        return { actionId: 'workspace.files.write', target, parameters: { op: 'mkdir', create_intermediates: params.create_intermediates === true, expected: fingerprint(target) } };
+      },
+      run: async (request) => makeDirectoryOwner(request),
+    },
+    'shell.exec': {
+      build: (params) => {
+        if (typeof params.command !== 'string' || !params.command.trim()) throw Object.assign(new Error('command is required'), { code: 'invalid_argument' });
+        return {
+          actionId: 'workspace.command.run', target: authority.canonicalPath(params.cwd ?? '~'),
+          parameters: { command: params.command, timeout_ms: boundedInteger(params.timeout_ms, 30000, 100, 120000, 'timeout_ms'), interpreter: SHELL_ARGV.join(' '), env: 'minimal-v1' },
+        };
+      },
+      run: async (request) => shellExec({ command: request.parameters.command, cwd: request.target, timeout_ms: request.parameters.timeout_ms }),
+    },
   };
-  const needsApproval = new Set(['files.write', 'files.mkdir', 'shell.exec']);
   return {
     definitions,
-    async invoke(commandId, params = {}) {
-      const handler = handlers[commandId];
-      if (!handler) return { ok: false, error_code: 'unknown_command', message: `Unknown Linux node command: ${commandId}` };
+    gate,
+    async invoke(commandId, params = {}, { invokeId = null } = {}) {
+      const command = commands[commandId];
+      if (!command) return { ok: false, error_code: 'unknown_command', message: `Unknown Linux node command: ${commandId}` };
+      let request;
       try {
-        if (needsApproval.has(commandId)) {
-          const approved = await approve({ command_id: commandId, params });
-          if (!approved) return { ok: false, error_code: 'permission_denied', message: 'The user did not approve this action' };
-        }
-        return await handler(params);
+        const built = command.build(params ?? {});
+        request = new ActionRequest({ workspaceRoot: authority.root, executionOwner: OWNERS[built.actionId], ...built });
       } catch (error) {
-        return { ok: false, error_code: error.code ?? 'command_failed', message: error.message };
+        const code = error instanceof WorkspaceAuthorityError ? 'permission_denied' : (error.code ?? 'invalid_argument');
+        return { ok: false, error_code: code, message: error.message };
       }
+      const decision = await gate.authorize(request, { invokeId, commandId, params: previewParams(commandId, params) });
+      if (!decision.allowed) {
+        const message = decision.verdict.checks.some((check) => check.name === 'Authority' && /did not approve/.test(check.reason))
+          ? 'The user did not approve this action' : `Denied by ISySentinel: ${decision.reason}`;
+        return { ok: false, error_code: 'permission_denied', message };
+      }
+      let result;
+      try { result = await command.run(request, params); }
+      catch (error) { result = { ok: false, error_code: error.code ?? 'command_failed', message: error.message }; }
+      gate.returned(request, { invokeId, result });
+      return result;
     },
   };
 }
 
-module.exports = { createCommandRegistry, expandPath, listFiles, searchFiles, readFile, which, shellExec, killAllProcessGroups, activeGroups };
+module.exports = { createCommandRegistry, expandPath, listFiles, searchFiles, readFile, which, shellExec, killAllProcessGroups, activeGroups, minimalEnv, fingerprint, OWNERS };

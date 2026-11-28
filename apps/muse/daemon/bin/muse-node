@@ -10,6 +10,10 @@ const fs = require('node:fs');
 const { createCommandRegistry, killAllProcessGroups } = require('../lib/commands');
 const { InvokeLedger } = require('../lib/invoke-ledger');
 const { NodeStatus, defaultStatusPath } = require('../lib/node-state');
+const { WorkspaceAuthority, GRANT_ALIASES, defaultStateDirectory } = require('../lib/workspace-authority');
+const { ReceiptLog } = require('../lib/receipts');
+
+function receiptsFile() { return path.join(defaultStateDirectory(), 'receipts', 'muse-node.jsonl'); }
 const { MuseNodeService } = require('../lib/node-service');
 const { createZenityApprover } = require('../lib/approval');
 const { defaultProfile, loadOrCreateIdentity } = require('../lib/store');
@@ -164,6 +168,10 @@ function backoffWithJitter(baseMs, random = Math.random) {
 async function start(profile, options = {}) {
   const status = new NodeStatus();
   const ledger = new InvokeLedger();
+  // One authority + receipt chain for the whole process; the policy file is
+  // re-read on every decision, so `muse-node revoke/lock` apply immediately.
+  const authority = new WorkspaceAuthority();
+  const receipts = new ReceiptLog({ file: receiptsFile() });
   let stopping = false;
   let wake = null;
   let dropSession = null;
@@ -181,7 +189,7 @@ async function start(profile, options = {}) {
     try {
       session = await openGateway(profile, options);
       const { identity, connection, rpc } = session;
-      const registry = createCommandRegistry({ approve: createZenityApprover() });
+      const registry = createCommandRegistry({ approve: createZenityApprover(), authority, receipts });
       const service = new MuseNodeService({ rpc, identity, registry, ledger, status });
       session.service = service;
       const ended = new Promise((resolve) => {
@@ -218,6 +226,38 @@ async function start(profile, options = {}) {
   status.transition('DISCONNECTED', 'daemon stopped');
 }
 
+// Operator commands. They run in the operator's terminal, never through a
+// model-reachable command: grants are a human decision.
+function authorityCommand(command, args) {
+  const authority = new WorkspaceAuthority();
+  const actionsFor = (name) => GRANT_ALIASES[name] ?? [name];
+  if (command === 'policy') {
+    console.log(JSON.stringify({ policy_file: authority.policyPath, ...authority.policy() }, null, 2));
+  } else if (command === 'grant') {
+    const [name, ...paths] = args;
+    if (!name) throw new Error('usage: muse-node grant read|write|shell|which|<action-id> [folder...]');
+    for (const actionId of actionsFor(name)) {
+      const needsPaths = actionId.startsWith('workspace.');
+      if (needsPaths && !paths.length) throw new Error(`${actionId} needs at least one folder`);
+      const current = authority.policy().grants[actionId]?.path_prefixes ?? [];
+      const grant = authority.setGrant(actionId, { enabled: true, ...(needsPaths ? { pathPrefixes: [...current, ...paths] } : {}) });
+      console.log(`granted ${actionId}${grant.path_prefixes ? ` in ${grant.path_prefixes.join(', ')}` : ''}`);
+    }
+  } else if (command === 'revoke') {
+    const [name] = args;
+    if (!name) throw new Error('usage: muse-node revoke read|write|shell|which|<action-id>');
+    for (const actionId of actionsFor(name)) { authority.setGrant(actionId, { enabled: false, pathPrefixes: [] }); console.log(`revoked ${actionId}`); }
+  } else if (command === 'lock' || command === 'unlock') {
+    authority.setLocked(command === 'lock');
+    console.log(command === 'lock' ? 'LOCKED: every command except ping is denied' : 'unlocked');
+  } else if (command === 'receipts') {
+    if (args.includes('--verify')) { console.log(JSON.stringify(ReceiptLog.verify(receiptsFile()))); return; }
+    const count = Number(args.find((value) => /^\d+$/.test(value)) ?? 20);
+    try { process.stdout.write(fs.readFileSync(receiptsFile(), 'utf8').trimEnd().split('\n').slice(-count).join('\n') + '\n'); }
+    catch (error) { if (error.code === 'ENOENT') console.log('no receipts yet'); else throw error; }
+  }
+}
+
 function printStatus() {
   try { process.stdout.write(fs.readFileSync(defaultStatusPath(), 'utf8')); }
   catch (error) { console.error(`[muse-node] no status yet (${error.code ?? error.message}): is the daemon running?`); process.exitCode = 1; }
@@ -237,6 +277,7 @@ async function main() {
     return;
   }
   if (command === 'status') return printStatus();
+  if (['policy', 'grant', 'revoke', 'lock', 'unlock', 'receipts'].includes(command)) return authorityCommand(command, process.argv.slice(3));
   const options = { cold: process.argv.includes('--cold'), stayMs: stayMs() };
   if (command === 'probe') return probe(profile, options);
   if (command === 'register') return register(profile, options);

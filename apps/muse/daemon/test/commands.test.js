@@ -6,9 +6,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createCommandRegistry, listFiles, readFile, searchFiles } = require('../lib/commands');
+const { WorkspaceAuthority } = require('../lib/workspace-authority');
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-commands-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'muse-commands-')));
   fs.writeFileSync(path.join(root, 'large.txt'), 'one\ntwo\nthree\nfour\n');
   fs.writeFileSync(path.join(root, 'small.md'), '# hello\n');
   fs.mkdirSync(path.join(root, 'folder'));
@@ -46,11 +47,13 @@ test('files.search recurses, filters and skips hidden files', (context) => {
 test('write and shell commands require explicit approval', async (context) => {
   const root = fixture();
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const denied = createCommandRegistry();
+  const authority = new WorkspaceAuthority({ root, stateDirectory: path.join(root, '.state') });
+  const quiet = { log() {}, error() {} };
+  const denied = createCommandRegistry({ authority, logger: quiet });
   const target = path.join(root, 'new.txt');
   assert.equal((await denied.invoke('files.write', { path: target, content: 'x' })).error_code, 'permission_denied');
   assert.equal(fs.existsSync(target), false);
-  const approved = createCommandRegistry({ approve: async () => true });
+  const approved = createCommandRegistry({ approve: async () => true, authority, logger: quiet });
   assert.equal((await approved.invoke('files.write', { path: target, content: 'x' })).ok, true);
   assert.equal(fs.readFileSync(target, 'utf8'), 'x');
   const execution = await approved.invoke('shell.exec', { command: 'printf linux-node', cwd: root });

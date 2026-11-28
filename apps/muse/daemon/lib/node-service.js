@@ -178,7 +178,7 @@ class MuseNodeService {
           this.logger.error(`[muse-node] invoke ack ${invokeId}: ${error.message}`);
         }
       }
-      return this.registry.invoke(commandId, params);
+      return this.registry.invoke(commandId, params, { invokeId });
     });
     if (replayed) this.logger.log(`[muse-node] invoke ${invokeId}: redelivered, replaying stored result (not executed again)`);
     await this.result(invokeId, result);

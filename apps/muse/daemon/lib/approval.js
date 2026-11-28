@@ -13,7 +13,14 @@ function preview(text, limit = PREVIEW_CHARS) {
   return value.length > limit ? `${value.slice(0, limit)}\n… (${value.length - limit} caracteres más)` : value;
 }
 
-function describe({ command_id: commandId, params = {} }) {
+function describe({ command_id: commandId, params = {}, action_id: actionId, target }) {
+  if (actionId && ['workspace.files.list', 'workspace.files.read', 'workspace.files.search', 'node.system.which'].includes(actionId)) {
+    const verb = { 'workspace.files.list': 'listar la carpeta', 'workspace.files.read': 'leer el archivo', 'workspace.files.search': 'buscar en', 'node.system.which': 'buscar el programa' }[actionId];
+    return {
+      title: 'Muse quiere leer algo fuera de tus carpetas permitidas',
+      body: `Muse pide ${verb}:\n${target}\n\nEs una sola vez. Para no volver a preguntar en esta carpeta:\nmuse-node grant read <carpeta>`,
+    };
+  }
   if (commandId === 'shell.exec') {
     return {
       title: 'Muse quiere ejecutar un comando',
@@ -42,7 +49,9 @@ function createZenityApprover({ timeoutMs = 110000, spawnImpl = spawn, env = pro
       logger.error(`[muse-node] approval ${request.command_id}: no graphical display, denied`);
       return Promise.resolve(false);
     }
-    const { title, body } = describe(request);
+    const { title, body: details } = describe(request);
+    // The short digest names the exact immutable request this yes applies to.
+    const body = request.digest ? `${details}\n\nHuella de la petición: ${request.digest.slice(0, 12)}` : details;
     return new Promise((resolve) => {
       let settled = false;
       const done = (approved, reason) => {
